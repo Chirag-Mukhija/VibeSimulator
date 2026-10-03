@@ -18,6 +18,8 @@ export const GENERATOR_VERSION = "0.1.0";
 export interface AnalyzeOptions {
   repoName?: string;
   now?: Date;
+  /** Embed a few lines of source around each evidence location (default true). */
+  includeSource?: boolean;
 }
 
 type Owner = FunctionLike | SourceFile;
@@ -30,7 +32,7 @@ type Step =
   | { kind: "dispatch"; fns: FunctionLike[]; site: CallSite }
   | { kind: "unresolved"; site: CallSite; reason: string };
 
-interface Ev { file: string; line: number; endLine?: number; snippet?: string }
+interface Ev { file: string; line: number; endLine?: number; snippet?: string; context?: { startLine: number; lines: string[] } }
 interface NodeOut {
   id: string; kind: string; label: string; evidence: Ev[]; confidence: "verified" | "inferred" | "unresolved";
   concepts: string[]; props: Record<string, unknown>;
@@ -121,8 +123,15 @@ class Analyzer {
         this.repo.lines.set(file, []);
       }
     }
-    const text = this.repo.lines.get(file)?.[line - 1]?.trim();
-    return text ? { file, line, snippet: truncate(text, 200) } : { file, line };
+    const lines = this.repo.lines.get(file) ?? [];
+    const text = lines[line - 1]?.trim();
+    const ev: Ev = text ? { file, line, snippet: truncate(text, 200) } : { file, line };
+    if (this.options.includeSource !== false && lines.length) {
+      const start = Math.max(1, line - 4);
+      const end = Math.min(lines.length, line + 5);
+      ev.context = { startLine: start, lines: lines.slice(start - 1, end).map((l) => truncate(l.replace(/\t/g, "  "), 400)) };
+    }
+    return ev;
   }
 
   // ---------------------------------------------------------------- nodes

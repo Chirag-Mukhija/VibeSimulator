@@ -96,6 +96,13 @@ export const Evidence = z
     line: z.int().positive(),
     endLine: z.int().positive().optional(),
     snippet: z.string().max(500).optional(),
+    /** Surrounding source lines, so a viewer can show the code without the repo. */
+    context: z
+      .strictObject({
+        startLine: z.int().positive(),
+        lines: z.array(z.string().max(400)).max(24),
+      })
+      .optional(),
   })
   .refine((e) => e.endLine === undefined || e.endLine >= e.line, {
     message: "endLine must be >= line",

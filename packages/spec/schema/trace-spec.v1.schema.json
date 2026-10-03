@@ -126,6 +126,29 @@
                 "snippet": {
                   "type": "string",
                   "maxLength": 500
+                },
+                "context": {
+                  "type": "object",
+                  "properties": {
+                    "startLine": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "lines": {
+                      "maxItems": 24,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 400
+                      }
+                    }
+                  },
+                  "required": [
+                    "startLine",
+                    "lines"
+                  ],
+                  "additionalProperties": false
                 }
               },
               "required": [
@@ -213,6 +236,29 @@
                 "snippet": {
                   "type": "string",
                   "maxLength": 500
+                },
+                "context": {
+                  "type": "object",
+                  "properties": {
+                    "startLine": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "lines": {
+                      "maxItems": 24,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 400
+                      }
+                    }
+                  },
+                  "required": [
+                    "startLine",
+                    "lines"
+                  ],
+                  "additionalProperties": false
                 }
               },
               "required": [
@@ -348,6 +394,29 @@
                 "snippet": {
                   "type": "string",
                   "maxLength": 500
+                },
+                "context": {
+                  "type": "object",
+                  "properties": {
+                    "startLine": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "lines": {
+                      "maxItems": 24,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 400
+                      }
+                    }
+                  },
+                  "required": [
+                    "startLine",
+                    "lines"
+                  ],
+                  "additionalProperties": false
                 }
               },
               "required": [
@@ -533,6 +602,29 @@
                 "snippet": {
                   "type": "string",
                   "maxLength": 500
+                },
+                "context": {
+                  "type": "object",
+                  "properties": {
+                    "startLine": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "lines": {
+                      "maxItems": 24,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 400
+                      }
+                    }
+                  },
+                  "required": [
+                    "startLine",
+                    "lines"
+                  ],
+                  "additionalProperties": false
                 }
               },
               "required": [
@@ -609,6 +701,29 @@
                 "snippet": {
                   "type": "string",
                   "maxLength": 500
+                },
+                "context": {
+                  "type": "object",
+                  "properties": {
+                    "startLine": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "lines": {
+                      "maxItems": 24,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 400
+                      }
+                    }
+                  },
+                  "required": [
+                    "startLine",
+                    "lines"
+                  ],
+                  "additionalProperties": false
                 }
               },
               "required": [

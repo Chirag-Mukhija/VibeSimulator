@@ -1,0 +1,59 @@
+[
+  {
+    "id": "job-scheduler",
+    "title": "Job Scheduler",
+    "tagline": "A job queue built from scratch: Redis sorted sets, retries with backoff, a dead-letter path, and a live dashboard fed by Redis pub/sub over WebSockets.",
+    "repoUrl": "https://github.com/Chirag-Mukhija/Job-Scheduler",
+    "author": "Chirag Mukhija",
+    "stack": [
+      "Express",
+      "Postgres",
+      "Redis",
+      "WebSocket",
+      "Worker"
+    ],
+    "stats": {
+      "routes": 6,
+      "flows": 11,
+      "findings": 9,
+      "high": 0
+    }
+  },
+  {
+    "id": "instabackend",
+    "title": "InstaBackend",
+    "tagline": "An Instagram-style API: JWT auth with Redis sessions, S3 presigned uploads, fan-out feeds and keyset pagination behind Nginx.",
+    "repoUrl": "https://github.com/Chirag-Mukhija/InstaBackend",
+    "author": "Chirag Mukhija",
+    "stack": [
+      "Express",
+      "Postgres",
+      "Redis",
+      "S3",
+      "Nginx"
+    ],
+    "stats": {
+      "routes": 31,
+      "flows": 31,
+      "findings": 5,
+      "high": 0
+    }
+  },
+  {
+    "id": "paytmentgateway",
+    "title": "Payment Gateway",
+    "tagline": "Idempotent payments on Postgres: API-key auth on every request, and each payment plus its first audit event in one transaction.",
+    "repoUrl": "https://github.com/Chirag-Mukhija/PaytmentGateway",
+    "author": "Chirag Mukhija",
+    "stack": [
+      "Express 5",
+      "Postgres"
+    ],
+    "stats": {
+      "routes": 4,
+      "flows": 4,
+      "findings": 2,
+      "high": 0
+    }
+  }
+]

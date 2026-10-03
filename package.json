@@ -9,7 +9,7 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && pnpm --filter @vibesim/web typecheck",
     "check": "pnpm typecheck && pnpm test",
     "vibesim": "node apps/cli/src/main.ts"
   },
