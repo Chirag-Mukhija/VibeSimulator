@@ -356,6 +356,8 @@
               "none",
               "new-per-request",
               "pooled",
+              "held",
+              "keep-alive",
               "persistent",
               "unknown"
             ]

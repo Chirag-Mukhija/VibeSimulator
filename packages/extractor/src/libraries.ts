@@ -5,7 +5,7 @@ import { summarizeSql } from "./sql.ts";
 import { checkQuery } from "./sqlschema.ts";
 
 type Protocol = "in-process" | "http" | "ws" | "sse" | "sql" | "mongodb" | "redis" | "amqp" | "smtp" | "unknown";
-type Lifecycle = "none" | "new-per-request" | "pooled" | "persistent" | "unknown";
+type Lifecycle = "none" | "new-per-request" | "pooled" | "held" | "keep-alive" | "persistent" | "unknown";
 
 /** Where an I/O operation lands. Resolved to a node by the graph builder. */
 export type Target =
@@ -62,6 +62,13 @@ const SDKS: Record<string, { paths: string[]; service: string; host: string; pro
   resend: { paths: ["Resend"], service: "Resend API", host: "api.resend.com" },
   twilio: { paths: [""], service: "Twilio API", host: "api.twilio.com" },
   nodemailer: { paths: ["createTransport"], service: "SMTP server", host: "smtp", protocol: "smtp" },
+  "@octokit/rest": { paths: ["Octokit"], service: "GitHub API", host: "api.github.com" },
+  lastfm: { paths: ["LastFmNode"], service: "Last.fm API", host: "ws.audioscrobbler.com" },
+  "@huggingface/inference": { paths: ["HfInference", "InferenceClient"], service: "Hugging Face Inference API", host: "router.huggingface.co" },
+  "@langchain/groq": { paths: ["ChatGroq"], service: "Groq API (through LangChain)", host: "api.groq.com" },
+  "@langchain/openai": { paths: ["ChatOpenAI", "OpenAIEmbeddings"], service: "OpenAI API (through LangChain)", host: "api.openai.com" },
+  "@lob/lob-typescript-sdk": { paths: ["LettersApi", "ZipLookupsApi"], service: "Lob API", host: "api.lob.com" },
+  googleapis: { paths: ["google.drive", "google.sheets", "google.calendar", "google.gmail", "google.youtube"], service: "Google APIs (googleapis)", host: "www.googleapis.com" },
 };
 
 const CREATORS: Creator[] = [
@@ -107,8 +114,13 @@ const CREATORS: Creator[] = [
     pkg: "@supabase/auth-helpers-nextjs", path: p, type: "supabase" as const,
   })),
   ...Object.entries(SDKS).flatMap(([pkg, s]) =>
-    s.paths.map((p) => ({ pkg, path: p, type: "sdk-client" as const, data: () => ({ service: s.service, host: s.host, protocol: s.protocol ?? "http" }) })),
+    s.paths.map((p) => ({
+      pkg, path: p, type: "sdk-client" as const,
+      data: (r: Resolver, call: CallExpression | NewExpression) => ({ service: s.service, host: s.host, protocol: s.protocol ?? "http", pool: booleanOption(r, call, "pool") === true }),
+    })),
   ),
+  // The native MongoDB driver; `new MongoClient(uri)` inside a handler means a new connection pool per request.
+  { pkg: "mongodb", path: "MongoClient", type: "mongo-client", isNew: true, data: (_r, call) => ({ perRequest: insideFunction(call) }) },
 ];
 
 /** express.json etc. look like members of the app factory, so match on exact path. */
@@ -338,11 +350,13 @@ export function classifyOp(r: Resolver, call: CallExpression | NewExpression, la
   switch (h.type) {
     case "pg-pool":
       if (method === "query") return sqlOp(r, h, args, "pooled");
-      if (method === "connect") return { ...dbOp(h, "pooled", "check out a dedicated connection"), props: { checkout: true } };
+      // No SQL is sent: the pool hands over an idle connection (or opens one, or waits for one).
+      if (method === "connect") return { ...dbOp(h, "none", "borrow a connection from the pool and keep it", "in-process"), props: { checkout: true } };
       return undefined;
     case "pg-pooled-client":
-      if (method === "query") return sqlOp(r, h, args, "pooled");
-      if (method === "release") return { ...dbOp(h, "pooled", "release the connection back to the pool"), props: { release: true } };
+      // Every statement goes over the one connection this code checked out (what makes a transaction work).
+      if (method === "query") return sqlOp(r, h, args, "held");
+      if (method === "release") return { ...dbOp(h, "none", "give the connection back to the pool", "in-process"), props: { release: true } };
       return undefined;
     case "pg-client": {
       const lc: Lifecycle = h.data.perRequest ? "new-per-request" : "persistent";
@@ -362,7 +376,7 @@ export function classifyOp(r: Resolver, call: CallExpression | NewExpression, la
         const channel = stringValue(r.value(args[0])) ?? "channel";
         return { target: { type: "topic", channel, broker: "redis" }, protocol: "redis", lifecycle: "persistent", mode: "async", label: `PUBLISH ${channel}`, props: {} };
       }
-      const keyHint = stringValue(r.value(args[0]));
+      const keyHint = displayValue(r.value(args[0]));
       return {
         target: { type: "resource", handle: h.root }, protocol: "redis", lifecycle: "persistent", mode: "sync",
         label: `${method.toUpperCase()}${keyHint ? " " + keyHint : ""}`, props: { command: method },
@@ -439,10 +453,22 @@ export function classifyOp(r: Resolver, call: CallExpression | NewExpression, la
     case "sdk-client": {
       if (path.length === 0 || method === "on" || (h.data.service === "Stripe API" && path[0] === "webhooks")) return undefined;
       const protocol = (h.data.protocol as Protocol) ?? "http";
+      // nodemailer without `pool: true` opens a new SMTP connection for every message.
+      const lifecycle: Lifecycle = protocol === "smtp" && !h.data.pool ? "new-per-request" : "pooled";
       return {
-        target: { type: "external", service: String(h.data.service), host: String(h.data.host) }, protocol, lifecycle: "pooled", mode: "sync",
-        label: path.join("."), props: { timeout: "sdk-default" },
+        target: { type: "external", service: String(h.data.service), host: String(h.data.host) }, protocol, lifecycle, mode: "sync",
+        label: path.join("."), props: { timeout: "sdk-default", ...(protocol === "http" ? { scheme: "https" } : {}) },
       };
+    }
+    case "mongo-client": {
+      const lc: Lifecycle = h.data.perRequest ? "new-per-request" : "pooled";
+      if (method === "connect") return dbOp(h, lc, h.data.perRequest ? "open a new MongoDB connection (TCP, TLS, authentication)" : "connect to MongoDB", "mongodb");
+      if (method === "close") return dbOp(h, lc, "close the connection", "mongodb");
+      if (MONGO_DRIVER_OPS.has(method)) {
+        const coll = collectionName(r, call);
+        return { ...dbOp(h, lc, `${method}${coll ? " " + coll : ""}`, "mongodb"), props: {} };
+      }
+      return undefined;
     }
     case "supabase": {
       if (path.length === 1 && method === "from") {
@@ -480,7 +506,9 @@ function dbOp(h: Handle, lifecycle: Lifecycle, label: string, protocol: Protocol
 }
 
 function sqlOp(r: Resolver, h: Handle, args: Node[], lifecycle: Lifecycle): Op {
-  const text = stringValue(r.value(args[0]));
+  const value = r.value(args[0]);
+  const text = stringValue(value);
+  const shown = displayValue(value);
   const sql = text ? summarizeSql(text) : undefined;
   if (!sql) return { ...dbOp(h, lifecycle, "query"), props: {} };
   // Check the WHERE clause against the repo's own schema when the table is known.
@@ -490,7 +518,7 @@ function sqlOp(r: Resolver, h: Handle, args: Node[], lifecycle: Lifecycle): Op {
   return {
     ...dbOp(h, lifecycle, sql.label),
     props: {
-      sql: sql.text, statement: sql.op, table: sql.table, hasLimit: sql.hasLimit, aggregate: sql.aggregate, singleRow,
+      sql: (shown ? summarizeSql(shown)?.text : undefined) ?? sql.text, statement: sql.op, table: sql.table, hasLimit: sql.hasLimit, aggregate: sql.aggregate, singleRow,
       ...(sql.op === "SELECT" ? { unbounded: !sql.hasLimit && !sql.aggregate && !singleRow, scoped: /\bWHERE\b/i.test(sql.text) } : {}),
       ...(facts ? { schemaChecked: true } : {}),
       ...(facts?.unindexed.length ? { missingIndex: facts.unindexed } : {}),
@@ -500,13 +528,36 @@ function sqlOp(r: Resolver, h: Handle, args: Node[], lifecycle: Lifecycle): Op {
 
 function urlOp(r: Resolver, _call: Node, args: Node[], method: string, base = ""): Op {
   const v = r.value(args[0]);
+  // A URL picked from a table at runtime (`config[provider].url`): one of several hosts, not the first.
+  if (v.kind === "choice") {
+    const urls = v.options.filter((o) => o.kind === "string").map((o) => (o as { value: string }).value);
+    const hosts = [...new Set(urls.map((u) => /^https?:\/\/([^/{}?]+)/.exec(u)?.[1]).filter((h): h is string => !!h))];
+    if (hosts.length > 1) {
+      return {
+        target: { type: "external", service: `one of ${hosts.length} services (picked at runtime)`, host: hosts.join(", ") },
+        protocol: "http", lifecycle: "pooled", mode: "sync", label: `${method} one of: ${hosts.slice(0, 4).join(", ")}${hosts.length > 4 ? `, +${hosts.length - 4} more` : ""}`,
+        props: { timeout: hasTimeout(r, args), hosts, scheme: "https" },
+      };
+    }
+  }
+  // `fetch(makeURL('https://api.example.com/v1/x', params))`: a local URL builder given a literal base.
+  if (v.kind !== "string" && args[0]) {
+    const origin = r.originOf(args[0]);
+    if (Node.isCallExpression(origin)) {
+      const baseArg = origin.getArguments()[0];
+      const literal = baseArg ? stringValue(r.value(baseArg)) : undefined;
+      if (literal && /^https?:\/\//.test(literal)) return urlOp(r, _call, [baseArg!, ...args.slice(1)], method, base);
+    }
+  }
   const s = pick(v, "string");
   const url = base + (s?.value ?? "{}");
+  const shown = base + (s?.display ?? s?.value ?? "<url>");
   const env = args[0] ? leadingEnvVar(r, args[0]) : undefined;
+  const scheme = /^(https?):/.exec(url)?.[1];
   return {
     target: { type: "url", method, url, template: !s || s.template, ...(env ? { envBase: env } : {}) },
-    protocol: "http", lifecycle: "pooled", mode: "sync", label: `${method} ${env ? url.replace(/^\{\}/, `\${${env}}`) : url}`,
-    props: { timeout: hasTimeout(r, args) },
+    protocol: "http", lifecycle: "pooled", mode: "sync", label: `${method} ${env ? shown.replace(/^<[^>]*>/, `\${${env}}`) : shown}`,
+    props: { timeout: hasTimeout(r, args), ...(scheme ? { scheme } : {}) },
   };
 }
 
@@ -575,6 +626,12 @@ function costArg(r: Resolver, pkg: string, fn: string, args: Node[]): number | u
 export function stringValue(v: Value): string | undefined {
   const s = pick(v, "string");
   return s?.value;
+}
+
+/** Like stringValue, but unknown parts are named (`refresh:<userId>:<jti>`) rather than {}. */
+export function displayValue(v: Value): string | undefined {
+  const s = pick(v, "string");
+  return s ? s.display ?? s.value : undefined;
 }
 
 function stringArg(r: Resolver, call: CallExpression | NewExpression, i: number): string | undefined {
@@ -676,4 +733,27 @@ function chainMethods(call: CallExpression | NewExpression): string[] {
     break;
   }
   return out;
+}
+
+const MONGO_DRIVER_OPS = new Set(["find", "findOne", "insertOne", "insertMany", "updateOne", "updateMany", "deleteOne", "deleteMany", "aggregate", "countDocuments", "bulkWrite", "replaceOne", "findOneAndUpdate", "createIndex", "createSearchIndex", "listSearchIndexes"]);
+
+/** `client.db(x).collection('docs').find()` -> "docs". */
+function collectionName(r: Resolver, call: CallExpression | NewExpression): string | undefined {
+  let cur: Node = call.getExpression();
+  while (Node.isPropertyAccessExpression(cur) || Node.isCallExpression(cur)) {
+    if (Node.isCallExpression(cur)) {
+      const e = cur.getExpression();
+      if (Node.isPropertyAccessExpression(e) && e.getName() === "collection") return stringValue(r.value(cur.getArguments()[0]));
+      cur = e;
+    } else cur = cur.getExpression();
+  }
+  return undefined;
+}
+
+function booleanOption(r: Resolver, call: CallExpression | NewExpression, name: string): boolean | undefined {
+  const opts = r.value(call.getArguments()[0]);
+  if (opts.kind !== "object") return undefined;
+  const prop = (opts.node as any).getProperty?.(name);
+  const init = prop && Node.isPropertyAssignment(prop) ? prop.getInitializer() : undefined;
+  return init ? init.getText() === "true" : undefined;
 }

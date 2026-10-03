@@ -73,7 +73,7 @@ export const FLOW_ASSUMPTIONS = [
   "Redis is single-threaded: about 0.05 ms of work and a 0.3 ms round trip per command.",
   "Third-party APIs answer in about 200 ms on average (Stripe 350 ms, LLM APIs 2 s, email 300 ms), with wide variation.",
   "bcrypt at work factor 10 takes about 65 ms, doubling per step; the thread pool has 4 threads per instance.",
-  "Branches (if/else) run half the time; catch blocks never; a handler picked at runtime is one of its candidates at random.",
+  "Each if/else takes one side, half the time each; code after a guard clause (like `if (!user) return 404`) always runs; catch blocks never run; a handler picked at runtime is one of its candidates at random.",
   `Pushing a message costs ${CALIBRATION.cpuPerWsMessageUs} µs per socket and an open SSE stream ${CALIBRATION.memoryPerConnectionKB.sse} KB, as measured in calibration.`,
   "Browsers are 40 ms away; requests slower than 30 s count as failed.",
 ];
@@ -163,7 +163,35 @@ export function simulateFlow(spec: TraceSpec, flowId: string, load: Load, change
     return { cores: dbCores.get(id)!, replica: replicaCores.get(id)!, pools: pools.get(id)! };
   };
 
-  interface Ctx { instance: number; held: Map<string, boolean>; }
+  interface Ctx {
+    instance: number;
+    held: Map<string, boolean>;
+    /** Which way each condition went for this request, so an if/else takes exactly one side. */
+    branches: Map<string, "then" | "else">;
+  }
+
+  /** Does this edge run on this request? Guards pass, alternatives are a coin flip per condition, catch blocks never run. */
+  function takes(ctx: Ctx, e: TraceEdge): boolean {
+    const p = e.props;
+    if (p.errorPath) return false;
+    const path = Array.isArray(p.branchPath) ? (p.branchPath as { condition: string; branch: "then" | "else"; guard?: boolean; exits?: boolean }[]) : [];
+    for (const step of path) {
+      // The early-exit side of a guard clause (an error answer) is rare; its continuation is the main path.
+      if (step.guard) {
+        if (step.branch === "then") return false;
+        continue;
+      }
+      const key = `${e.from}::${step.condition}`;
+      let way = ctx.branches.get(key);
+      if (!way) {
+        way = sim.rng.chance(0.5) ? "then" : "else";
+        ctx.branches.set(key, way);
+      }
+      if (way !== step.branch) return false;
+    }
+    if (!path.length && p.conditional && !sim.rng.chance(0.5)) return false;
+    return true;
+  }
 
   function* cpu(ctx: Ctx, ms: number, label = "Your code (CPU)"): Process {
     const start = sim.now;
@@ -236,8 +264,7 @@ export function simulateFlow(spec: TraceSpec, flowId: string, load: Load, change
   function* visit(ctx: Ctx, t: TreeNode): Process {
     const e = t.edge;
     const p = e.props;
-    if (p.errorPath) return;
-    if (p.conditional && !sim.rng.chance(0.5)) return;
+    if (!takes(ctx, e)) return;
     if (p.dispatch && typeof p.candidates === "number" && !sim.rng.chance(1 / p.candidates)) return;
     const to = nodes.get(e.to)!;
     const from = nodes.get(e.from)!;
@@ -342,7 +369,7 @@ export function simulateFlow(spec: TraceSpec, flowId: string, load: Load, change
   const target = Math.min(1500, Math.max(300, Math.round(rate * 6)));
 
   function* request(): Process {
-    const ctx: Ctx = { instance: rr++ % n, held: new Map() };
+    const ctx: Ctx = { instance: rr++ % n, held: new Map(), branches: new Map() };
     const start = sim.now;
     yield* sequence(ctx, roots);
     if (push) yield* cpu(ctx, (load.users * CALIBRATION.cpuPerWsMessageUs) / 1000, "Pushing to sockets");

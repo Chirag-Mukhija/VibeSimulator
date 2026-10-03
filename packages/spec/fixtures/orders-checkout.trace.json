@@ -3,86 +3,173 @@
   "schemaVersion": "1",
   "meta": {
     "generatedAt": "2026-10-03T00:00:00Z",
-    "generator": { "name": "hand-written-fixture", "version": "0.1.0" },
-    "repo": { "name": "shop-example" },
-    "frameworks": ["nextjs", "express", "prisma", "bullmq"]
+    "generator": {
+      "name": "hand-written-fixture",
+      "version": "0.1.0"
+    },
+    "repo": {
+      "name": "shop-example"
+    },
+    "frameworks": [
+      "nextjs",
+      "express",
+      "prisma",
+      "bullmq"
+    ]
   },
   "nodes": [
     {
       "id": "ui:checkout-button",
       "kind": "ui-event",
       "label": "Click \"Place order\"",
-      "evidence": [{ "file": "web/app/checkout/page.tsx", "line": 42, "snippet": "<button onClick={placeOrder}>Place order</button>" }],
+      "evidence": [
+        {
+          "file": "web/app/checkout/page.tsx",
+          "line": 42,
+          "snippet": "<button onClick={placeOrder}>Place order</button>"
+        }
+      ],
       "confidence": "verified"
     },
     {
       "id": "route:POST:/api/orders",
       "kind": "route",
       "label": "POST /api/orders",
-      "evidence": [{ "file": "api/src/routes/orders.ts", "line": 12, "snippet": "router.post(\"/api/orders\", requireAuth, createOrder)" }],
+      "evidence": [
+        {
+          "file": "api/src/routes/orders.ts",
+          "line": 12,
+          "snippet": "router.post(\"/api/orders\", requireAuth, createOrder)"
+        }
+      ],
       "confidence": "verified",
-      "concepts": ["http-request-lifecycle"],
-      "props": { "method": "POST", "path": "/api/orders" }
+      "concepts": [
+        "http-request-lifecycle"
+      ],
+      "props": {
+        "method": "POST",
+        "path": "/api/orders"
+      }
     },
     {
       "id": "mw:requireAuth",
       "kind": "middleware",
       "label": "requireAuth",
-      "evidence": [{ "file": "api/src/middleware/auth.ts", "line": 8, "snippet": "export function requireAuth(req, res, next) {" }],
+      "evidence": [
+        {
+          "file": "api/src/middleware/auth.ts",
+          "line": 8,
+          "snippet": "export function requireAuth(req, res, next) {"
+        }
+      ],
       "confidence": "verified"
     },
     {
       "id": "handler:createOrder",
       "kind": "handler",
       "label": "createOrder",
-      "evidence": [{ "file": "api/src/handlers/orders.ts", "line": 15, "snippet": "export async function createOrder(req, res) {" }],
+      "evidence": [
+        {
+          "file": "api/src/handlers/orders.ts",
+          "line": 15,
+          "snippet": "export async function createOrder(req, res) {"
+        }
+      ],
       "confidence": "verified"
     },
     {
       "id": "svc:reserveStock",
       "kind": "service",
       "label": "reserveStock",
-      "evidence": [{ "file": "api/src/services/inventory.ts", "line": 20, "snippet": "export async function reserveStock(items) {" }],
+      "evidence": [
+        {
+          "file": "api/src/services/inventory.ts",
+          "line": 20,
+          "snippet": "export async function reserveStock(items) {"
+        }
+      ],
       "confidence": "verified"
     },
     {
       "id": "db:postgres",
       "kind": "database",
       "label": "Postgres (Prisma)",
-      "evidence": [{ "file": "api/src/db.ts", "line": 3, "snippet": "export const prisma = new PrismaClient()" }],
+      "evidence": [
+        {
+          "file": "api/src/db.ts",
+          "line": 3,
+          "snippet": "export const prisma = new PrismaClient()"
+        }
+      ],
       "confidence": "verified",
-      "concepts": ["connection-pooling"],
-      "props": { "engine": "postgres", "client": "prisma" }
+      "concepts": [
+        "connection-pooling"
+      ],
+      "props": {
+        "engine": "postgres",
+        "client": "prisma"
+      }
     },
     {
       "id": "ext:stripe",
       "kind": "external-api",
       "label": "Stripe API",
-      "evidence": [{ "file": "api/src/handlers/orders.ts", "line": 31, "snippet": "await stripe.paymentIntents.create({ amount, currency: \"usd\" })" }],
+      "evidence": [
+        {
+          "file": "api/src/handlers/orders.ts",
+          "line": 31,
+          "snippet": "await stripe.paymentIntents.create({ amount, currency: \"usd\" })"
+        }
+      ],
       "confidence": "verified",
-      "props": { "host": "api.stripe.com" }
+      "props": {
+        "host": "api.stripe.com"
+      }
     },
     {
       "id": "queue:email",
       "kind": "queue",
       "label": "email queue (BullMQ)",
-      "evidence": [{ "file": "api/src/queues.ts", "line": 4, "snippet": "export const emailQueue = new Queue(\"email\", { connection })" }],
+      "evidence": [
+        {
+          "file": "api/src/queues.ts",
+          "line": 4,
+          "snippet": "export const emailQueue = new Queue(\"email\", { connection })"
+        }
+      ],
       "confidence": "verified",
-      "concepts": ["message-queue"],
-      "props": { "broker": "redis", "library": "bullmq" }
+      "concepts": [
+        "message-queue"
+      ],
+      "props": {
+        "broker": "redis",
+        "library": "bullmq"
+      }
     },
     {
       "id": "worker:sendReceipt",
       "kind": "worker",
       "label": "sendReceipt worker",
-      "evidence": [{ "file": "api/src/workers/email.ts", "line": 6, "snippet": "new Worker(\"email\", sendReceipt, { connection })" }],
+      "evidence": [
+        {
+          "file": "api/src/workers/email.ts",
+          "line": 6,
+          "snippet": "new Worker(\"email\", sendReceipt, { connection })"
+        }
+      ],
       "confidence": "verified"
     },
     {
       "id": "ext:email-provider",
       "kind": "external-api",
       "label": "Email provider",
-      "evidence": [{ "file": "api/src/workers/email.ts", "line": 14, "snippet": "await mailer.send(receipt)" }],
+      "evidence": [
+        {
+          "file": "api/src/workers/email.ts",
+          "line": 14,
+          "snippet": "await mailer.send(receipt)"
+        }
+      ],
       "confidence": "inferred",
       "source": "llm"
     },
@@ -90,7 +177,13 @@
       "id": "unknown:order-plugins",
       "kind": "unknown",
       "label": "Dynamic plugin call",
-      "evidence": [{ "file": "api/src/handlers/orders.ts", "line": 44, "snippet": "await plugins[name].run(order)" }],
+      "evidence": [
+        {
+          "file": "api/src/handlers/orders.ts",
+          "line": 44,
+          "snippet": "await plugins[name].run(order)"
+        }
+      ],
       "confidence": "unresolved"
     }
   ],
@@ -100,10 +193,16 @@
       "from": "ui:checkout-button",
       "to": "route:POST:/api/orders",
       "protocol": "http",
-      "lifecycle": "pooled",
+      "lifecycle": "keep-alive",
       "mode": "sync",
       "label": "fetch POST /api/orders",
-      "evidence": [{ "file": "web/app/checkout/page.tsx", "line": 18, "snippet": "await fetch(\"/api/orders\", { method: \"POST\", body })" }],
+      "evidence": [
+        {
+          "file": "web/app/checkout/page.tsx",
+          "line": 18,
+          "snippet": "await fetch(\"/api/orders\", { method: \"POST\", body })"
+        }
+      ],
       "confidence": "verified"
     },
     {
@@ -113,7 +212,12 @@
       "protocol": "in-process",
       "lifecycle": "none",
       "mode": "sync",
-      "evidence": [{ "file": "api/src/routes/orders.ts", "line": 12 }],
+      "evidence": [
+        {
+          "file": "api/src/routes/orders.ts",
+          "line": 12
+        }
+      ],
       "confidence": "verified"
     },
     {
@@ -124,7 +228,12 @@
       "lifecycle": "none",
       "mode": "sync",
       "label": "next()",
-      "evidence": [{ "file": "api/src/routes/orders.ts", "line": 12 }],
+      "evidence": [
+        {
+          "file": "api/src/routes/orders.ts",
+          "line": 12
+        }
+      ],
       "confidence": "verified"
     },
     {
@@ -134,7 +243,13 @@
       "protocol": "in-process",
       "lifecycle": "none",
       "mode": "sync",
-      "evidence": [{ "file": "api/src/handlers/orders.ts", "line": 22, "snippet": "await reserveStock(items)" }],
+      "evidence": [
+        {
+          "file": "api/src/handlers/orders.ts",
+          "line": 22,
+          "snippet": "await reserveStock(items)"
+        }
+      ],
       "confidence": "verified"
     },
     {
@@ -145,7 +260,13 @@
       "lifecycle": "pooled",
       "mode": "sync",
       "label": "UPDATE product, once per cart item",
-      "evidence": [{ "file": "api/src/services/inventory.ts", "line": 24, "snippet": "await prisma.product.update({ where: { id }, data: { stock: { decrement: qty } } })" }],
+      "evidence": [
+        {
+          "file": "api/src/services/inventory.ts",
+          "line": 24,
+          "snippet": "await prisma.product.update({ where: { id }, data: { stock: { decrement: qty } } })"
+        }
+      ],
       "confidence": "verified"
     },
     {
@@ -153,10 +274,16 @@
       "from": "handler:createOrder",
       "to": "db:postgres",
       "protocol": "sql",
-      "lifecycle": "pooled",
+      "lifecycle": "held",
       "mode": "sync",
-      "label": "INSERT order",
-      "evidence": [{ "file": "api/src/handlers/orders.ts", "line": 27, "snippet": "const order = await prisma.order.create({ data })" }],
+      "label": "INSERT order, on the connection held for the checkout transaction",
+      "evidence": [
+        {
+          "file": "api/src/handlers/orders.ts",
+          "line": 27,
+          "snippet": "const order = await prisma.order.create({ data })"
+        }
+      ],
       "confidence": "verified"
     },
     {
@@ -167,7 +294,12 @@
       "lifecycle": "pooled",
       "mode": "sync",
       "label": "create PaymentIntent",
-      "evidence": [{ "file": "api/src/handlers/orders.ts", "line": 31 }],
+      "evidence": [
+        {
+          "file": "api/src/handlers/orders.ts",
+          "line": 31
+        }
+      ],
       "confidence": "verified"
     },
     {
@@ -178,7 +310,13 @@
       "lifecycle": "persistent",
       "mode": "async",
       "label": "enqueue receipt job",
-      "evidence": [{ "file": "api/src/handlers/orders.ts", "line": 38, "snippet": "await emailQueue.add(\"receipt\", { orderId: order.id })" }],
+      "evidence": [
+        {
+          "file": "api/src/handlers/orders.ts",
+          "line": 38,
+          "snippet": "await emailQueue.add(\"receipt\", { orderId: order.id })"
+        }
+      ],
       "confidence": "verified"
     },
     {
@@ -188,7 +326,12 @@
       "protocol": "unknown",
       "lifecycle": "unknown",
       "mode": "sync",
-      "evidence": [{ "file": "api/src/handlers/orders.ts", "line": 44 }],
+      "evidence": [
+        {
+          "file": "api/src/handlers/orders.ts",
+          "line": 44
+        }
+      ],
       "confidence": "unresolved"
     },
     {
@@ -199,7 +342,12 @@
       "lifecycle": "persistent",
       "mode": "async",
       "label": "worker pulls job",
-      "evidence": [{ "file": "api/src/workers/email.ts", "line": 6 }],
+      "evidence": [
+        {
+          "file": "api/src/workers/email.ts",
+          "line": 6
+        }
+      ],
       "confidence": "verified"
     },
     {
@@ -210,7 +358,12 @@
       "lifecycle": "pooled",
       "mode": "sync",
       "label": "send receipt email",
-      "evidence": [{ "file": "api/src/workers/email.ts", "line": 14 }],
+      "evidence": [
+        {
+          "file": "api/src/workers/email.ts",
+          "line": 14
+        }
+      ],
       "confidence": "inferred",
       "source": "llm"
     }
@@ -221,22 +374,49 @@
       "label": "Place order (checkout button)",
       "entry": "ui:checkout-button",
       "steps": [
-        { "edge": "e:checkout-fetch" },
-        { "edge": "e:route-auth" },
-        { "edge": "e:auth-handler" },
-        { "edge": "e:handler-reserve" },
-        { "edge": "e:reserve-update", "note": "Runs inside a for-loop over cart items" },
-        { "edge": "e:order-insert" },
-        { "edge": "e:stripe-charge" },
-        { "edge": "e:enqueue-receipt", "note": "Response returns without waiting for the email" },
-        { "edge": "e:plugins" }
+        {
+          "edge": "e:checkout-fetch"
+        },
+        {
+          "edge": "e:route-auth"
+        },
+        {
+          "edge": "e:auth-handler"
+        },
+        {
+          "edge": "e:handler-reserve"
+        },
+        {
+          "edge": "e:reserve-update",
+          "note": "Runs inside a for-loop over cart items"
+        },
+        {
+          "edge": "e:order-insert"
+        },
+        {
+          "edge": "e:stripe-charge"
+        },
+        {
+          "edge": "e:enqueue-receipt",
+          "note": "Response returns without waiting for the email"
+        },
+        {
+          "edge": "e:plugins"
+        }
       ]
     },
     {
       "id": "flow:send-receipt",
       "label": "Send receipt email (background job)",
       "entry": "queue:email",
-      "steps": [{ "edge": "e:queue-worker" }, { "edge": "e:send-email" }]
+      "steps": [
+        {
+          "edge": "e:queue-worker"
+        },
+        {
+          "edge": "e:send-email"
+        }
+      ]
     }
   ],
   "findings": [
@@ -247,8 +427,16 @@
       "title": "Database write inside a loop in reserveStock",
       "consequence": "One UPDATE per cart item. A 20-item cart makes 20 sequential round trips while holding a pooled connection, so under load the pool drains and requests queue.",
       "concept": "n-plus-one",
-      "refs": ["e:reserve-update"],
-      "evidence": [{ "file": "api/src/services/inventory.ts", "line": 23, "endLine": 25 }]
+      "refs": [
+        "e:reserve-update"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/services/inventory.ts",
+          "line": 23,
+          "endLine": 25
+        }
+      ]
     },
     {
       "id": "finding:stripe-in-request",
@@ -256,16 +444,32 @@
       "severity": "medium",
       "title": "Stripe call blocks the order request",
       "consequence": "Every order waits on Stripe's latency. If Stripe slows down, your checkout slows down with it and in-flight requests pile up.",
-      "refs": ["e:stripe-charge"],
-      "evidence": [{ "file": "api/src/handlers/orders.ts", "line": 31 }]
+      "refs": [
+        "e:stripe-charge"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/handlers/orders.ts",
+          "line": 31
+        }
+      ]
     }
   ],
   "gaps": [
     {
       "id": "gap:order-plugins",
-      "refs": ["unknown:order-plugins", "e:plugins"],
+      "refs": [
+        "unknown:order-plugins",
+        "e:plugins"
+      ],
       "reason": "Call target is chosen at runtime from a plugin map, so the parser cannot tell what runs.",
-      "evidence": [{ "file": "api/src/handlers/orders.ts", "line": 44, "snippet": "await plugins[name].run(order)" }]
+      "evidence": [
+        {
+          "file": "api/src/handlers/orders.ts",
+          "line": 44,
+          "snippet": "await plugins[name].run(order)"
+        }
+      ]
     }
   ]
 }

@@ -22,7 +22,15 @@ export interface ProxyInfo {
   listen: { file: string; line: number };
   proxyPass: { file: string; line: number };
   upstreams: string[];
+  /** `limit_req_zone ... rate=10r/s` */
   rateLimit?: string;
+  /** What the zone counts by, e.g. $binary_remote_addr (per client IP). */
+  rateKey?: string;
+  burst?: number;
+  nodelay?: boolean;
+  limitReq?: { file: string; line: number };
+  /** `keepalive N` in the upstream block plus `proxy_http_version 1.1`: nginx reuses connections to the app. */
+  upstreamKeepalive: boolean;
 }
 
 export interface Infra {
@@ -129,13 +137,20 @@ export function parseNginx(file: string, text: string): ProxyInfo | undefined {
   if (passLine < 0) return undefined;
   const listenLine = find(/\blisten\s/);
   const upstreams = [...text.matchAll(/\bserver\s+([\w.-]+:\d+)/g)].map((m) => m[1]!);
-  const rate = /limit_req_zone[^;]*rate=([\w/]+)/.exec(text)?.[1];
+  const zone = /limit_req_zone\s+(\S+)[^;]*rate=([\w/]+)/.exec(text);
+  const limitLine = find(/^\s*limit_req\s/);
+  const limit = limitLine >= 0 ? lines[limitLine]! : "";
+  const burst = /burst=(\d+)/.exec(limit)?.[1];
   return {
     name: "nginx",
     listen: { file, line: (listenLine >= 0 ? listenLine : passLine) + 1 },
     proxyPass: { file, line: passLine + 1 },
     upstreams,
-    rateLimit: rate,
+    rateLimit: zone?.[2],
+    rateKey: zone?.[1],
+    ...(burst ? { burst: Number(burst) } : {}),
+    ...(limitLine >= 0 ? { nodelay: /\bnodelay\b/.test(limit), limitReq: { file, line: limitLine + 1 } } : {}),
+    upstreamKeepalive: /upstream\s+[\w.-]+\s*\{[^}]*\bkeepalive\s+\d+/.test(text) && /proxy_http_version\s+1\.1/.test(text),
   };
 }
 

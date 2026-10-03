@@ -23,6 +23,7 @@ export type HandleType =
   | "prisma"
   | "mongoose-model"
   | "mongoose-doc"
+  | "mongo-client" // the native MongoDB driver
   | "bull-queue"
   | "http-client" // axios instance
   | "sdk-client" // stripe, openai, ...
@@ -52,7 +53,8 @@ export type Value =
   | { kind: "object"; node: Node }
   | { kind: "handle"; handle: Handle }
   | { kind: "member"; handle: Handle; path: string[] }
-  | { kind: "string"; value: string; template: boolean }
+  /** `value` marks unknown parts as {} (for matching routes); `display` names them: `queue:priority:<tier>`. */
+  | { kind: "string"; value: string; template: boolean; display?: string }
   | { kind: "collection"; decl: Node }
   | { kind: "class"; node: Node }
   /** Return value of a call into a package we have no model for. */
@@ -145,7 +147,7 @@ export class Resolver {
     if (Node.isStringLiteral(node) || Node.isNoSubstitutionTemplateLiteral(node)) {
       return { kind: "string", value: node.getLiteralText(), template: false };
     }
-    if (Node.isTemplateExpression(node)) return { kind: "string", value: templatePattern(node), template: true };
+    if (Node.isTemplateExpression(node)) return this.template(node);
     if (Node.isBinaryExpression(node)) return this.binary(node);
     if (Node.isConditionalExpression(node)) {
       return choice([this.value(node.getWhenTrue()), this.value(node.getWhenFalse())]);
@@ -182,11 +184,34 @@ export class Resolver {
       const ls = l.kind === "string" ? l.value : "{}";
       const rs = r.kind === "string" ? r.value : "{}";
       if (l.kind === "string" || r.kind === "string") {
-        return { kind: "string", value: ls + rs, template: l.kind !== "string" || r.kind !== "string" || (l.kind === "string" && l.template) || (r.kind === "string" && r.template) };
+        const ld = l.kind === "string" ? l.display ?? l.value : placeholder(node.getLeft());
+        const rd = r.kind === "string" ? r.display ?? r.value : placeholder(node.getRight());
+        return { kind: "string", value: ls + rs, display: ld + rd, template: l.kind !== "string" || r.kind !== "string" || (l.kind === "string" && l.template) || (r.kind === "string" && r.template) };
       }
     }
     if (op === SyntaxKind.EqualsToken) return this.value(node.getRight());
     return UNKNOWN;
+  }
+
+  /** `${base}/v3/${id}`: constant parts filled in, the rest kept as {} (and named in `display`). */
+  private template(node: Node & { getHead(): Node; getTemplateSpans(): Node[] }): Value {
+    let value = (node.getHead() as any).getLiteralText() as string;
+    let display = value;
+    let known = true;
+    for (const span of node.getTemplateSpans()) {
+      const expr = (span as any).getExpression() as Node;
+      const v = this.value(expr);
+      const lit = (span as any).getLiteral().getLiteralText() as string;
+      if (v.kind === "string" && !v.template) {
+        value += v.value + lit;
+        display += v.value + lit;
+      } else {
+        known = false;
+        value += "{}" + lit;
+        display += (v.kind === "string" ? v.display ?? v.value : placeholder(expr)) + lit;
+      }
+    }
+    return { kind: "string", value, display, template: !known };
   }
 
   private identifier(id: Node): Value {
@@ -797,10 +822,10 @@ function propName(prop: Node & { getName(): string }): string {
   return prop.getName().replace(/^["']|["']$/g, "");
 }
 
-function templatePattern(node: Node & { getHead(): Node; getTemplateSpans(): Node[] }): string {
-  let out = (node.getHead() as any).getLiteralText();
-  for (const span of node.getTemplateSpans()) out += "{}" + (span as any).getLiteral().getLiteralText();
-  return out;
+/** How an unknown part of a string is shown: `<tier>`, `<req.params.id>`. */
+function placeholder(expr: Node): string {
+  const t = expr.getText().replace(/\s+/g, " ");
+  return `<${t.length > 32 ? `${t.slice(0, 31)}…` : t}>`;
 }
 
 function isDeclarationNode(n: Node): boolean {

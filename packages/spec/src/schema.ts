@@ -60,7 +60,9 @@ export const PROTOCOLS = [
 export const LIFECYCLES = [
   "none", // in-process call, no connection
   "new-per-request", // opened and closed for each use
-  "pooled", // borrowed from a pool (DB pool, HTTP keep-alive agent)
+  "pooled", // borrowed from a pool for this one call and given back (DB pool, HTTP agent)
+  "held", // a connection this code checked out and keeps across calls (a transaction) until it releases it
+  "keep-alive", // a client's HTTP connection: reused if one is open, otherwise opened first; the caller decides
   "persistent", // one long-lived connection (WebSocket, Redis subscriber)
   "unknown",
 ] as const;
@@ -307,17 +309,15 @@ function checkReferences(spec: TraceSpec, ctx: z.RefinementCtx) {
       issue(["flows", i, "entry"], `unknown node "${flow.entry}"`);
       return;
     }
+    // An edge may repeat: a function called from two places makes its calls twice.
     const reached = new Set([flow.entry]);
-    const used = new Set<string>();
     flow.steps.forEach((step, j) => {
       const path = ["flows", i, "steps", j, "edge"];
       const edge = edges.get(step.edge);
       if (!edge) return issue(path, `unknown edge "${step.edge}"`);
-      if (used.has(step.edge)) return issue(path, `edge "${step.edge}" appears twice in flow`);
       if (!reached.has(edge.from)) {
         return issue(path, `edge "${step.edge}" starts at "${edge.from}", which the flow has not reached`);
       }
-      used.add(step.edge);
       reached.add(edge.to);
     });
   });

@@ -6,7 +6,7 @@ import { runFindings } from "@vibesim/findings";
 import { loadRepo, relPath, isInlineScript, type Repo } from "./project.ts";
 import { Resolver, isFunctionLike, pick, type FunctionLike, type Handle, type Value } from "./values.ts";
 import { hooks, classifyOp, stringValue, numericValue, type Op, type Target } from "./libraries.ts";
-import { callSites, forwardedCall, functionKeyName, functionName, moduleLabel, enclosingFunction, type CallSite } from "./functions.ts";
+import { callSites, forwardedCall, functionKeyName, functionName, moduleLabel, enclosingFunction, responsesOf, type CallSite } from "./functions.ts";
 import { extractExpressRoutes, type Route, type ChainElement } from "./express.ts";
 import { readInfra, type Infra } from "./infra.ts";
 import { extractNextRoutes, isNextApp } from "./nextjs.ts";
@@ -30,6 +30,8 @@ type Step =
   /** Calls a function received as a parameter; resolved per caller when expanded in a flow. */
   | { kind: "param"; index: number; fns: FunctionLike[]; site: CallSite }
   | { kind: "dispatch"; fns: FunctionLike[]; site: CallSite }
+  /** `passport.authenticate('local', cb)(req, res, next)` inside a handler. */
+  | { kind: "passport"; call: CallExpression; site: CallSite }
   | { kind: "unresolved"; site: CallSite; reason: string };
 
 interface Ev { file: string; line: number; endLine?: number; snippet?: string; context?: { startLine: number; lines: string[] } }
@@ -49,10 +51,11 @@ interface EdgeOpts {
 }
 
 const FN_KIND_RANK: Record<string, number> = { service: 0, worker: 1, middleware: 2, handler: 2 };
-const RESOURCE_TYPES = new Set(["pg-pool", "pg-client", "mysql", "redis-client", "prisma", "mongoose-model", "drizzle"]);
+const RESOURCE_TYPES = new Set(["pg-pool", "pg-client", "mysql", "redis-client", "prisma", "mongoose-model", "drizzle", "mongo-client"]);
 
 /** Analyzes a repository and returns a validated Trace Spec. */
-const GENERIC_SCRIPT_NAMES = new Set(["start", "dev", "serve", "server", "prod", "production", "main", "run"]);
+const OWNED_KINDS = new Set(["route", "middleware", "handler", "service", "worker", "timer", "ui-event", "ws-endpoint", "sse-endpoint"]);
+const GENERIC_SCRIPT_NAMES = new Set(["start", "dev", "serve", "server", "prod", "production", "main", "run", "index", "app"]);
 
 export function analyzeRepo(root: string, options: AnalyzeOptions = {}): TraceSpec {
   const repo = loadRepo(root);
@@ -76,6 +79,10 @@ class Analyzer {
   private wsDeliver = new Map<string, { fn: FunctionLike; at: Node }[]>();
   private wsHasClient = new Set<string>();
   private fileServices = new Map<string, string>();
+  /** express-session middleware with a store: where it writes the session back at the end of a request. */
+  private sessionWrites = new Map<string, { to: string; protocol: string; lifecycle: string; at: Node; pkg: string }>();
+  private strategies?: Map<string, { pkg: string; verify?: FunctionLike; at: Node }>;
+  private userModel?: Handle | null;
   private clientFiles = new Set<SourceFile>();
   private next = false;
 
@@ -167,30 +174,51 @@ class Analyzer {
   }
 
   private routeNode(route: Route): string {
-    return this.addNode({
+    const id = this.addNode({
       id: `route:${route.method}:${route.path}`, kind: "route", label: `${route.method} ${route.path}`,
       evidence: [this.ev(route.registeredAt)], concepts: ["http-request-lifecycle"],
       props: { method: route.method, path: route.path },
     });
+    const node = this.nodes.get(id)!;
+    if (!node.props.errorHandlers && route.errorHandlers?.length) node.props.errorHandlers = this.errorHandlerNodes(route);
+    return id;
   }
 
   private libMiddlewareNode(h: Handle): string {
     const name = String(h.data.name ?? h.lib);
     const ev = this.ev(h.created);
     const concepts = name === "express-rate-limit" ? ["rate-limiting"] : [];
-    return this.addNode({
-      id: `mw:${name}@${ev.file}:${ev.line}`, kind: "middleware", label: name, evidence: [ev], concepts,
-      props: { library: name, builtin: true },
-    });
+    const id = `mw:${name}@${ev.file}:${ev.line}`;
+    if (this.nodes.has(id)) return id;
+    const props: Record<string, unknown> = { library: name, builtin: true };
+    let label = name;
+    if (name === "express-rate-limit" && Node.isCallExpression(h.created)) {
+      // `const loginLimiter = rateLimit({ windowMs, max })`: name it and record its limits.
+      const holder = h.created.getParent();
+      if (holder && Node.isVariableDeclaration(holder)) label = `${holder.getName()} (express-rate-limit)`;
+      const opts = this.r.value(h.created.getArguments()[0]);
+      if (opts.kind === "object") {
+        const n = (k: string) => {
+          const prop = (opts.node as any).getProperty?.(k);
+          const init = prop && Node.isPropertyAssignment(prop) ? prop.getInitializer() : undefined;
+          return init ? numericValue(this.r, init) : undefined;
+        };
+        const windowMs = n("windowMs");
+        const max = n("limit") ?? n("max");
+        if (windowMs !== undefined) props.windowMs = windowMs;
+        if (max !== undefined) props.max = max;
+        props.sharedStore = (opts.node as any).getProperty?.("store") !== undefined;
+      }
+    }
+    return this.addNode({ id, kind: "middleware", label, evidence: [ev], concepts, props });
   }
 
+  /** Whoever calls the server. Its evidence is where clients connect: the proxy's listen, or app.listen(). */
   private clientNode(): string {
-    const first = this.routes[0]?.registeredAt;
-    return this.addNode({
-      id: "client:http", kind: "client", label: "HTTP client (browser, app, curl)",
-      evidence: [first ? this.ev(first) : this.evAt("package.json", 1)],
-      props: {},
-    });
+    const proxy = this.infra.proxies[0];
+    const listen = this.listenCalls()[0];
+    const ev = proxy ? this.evAt(proxy.listen.file, proxy.listen.line) : listen ? this.ev(listen) : this.routes[0] ? this.ev(this.routes[0].registeredAt) : this.evAt("package.json", 1);
+    return this.addNode({ id: "client:http", kind: "client", label: "HTTP client (browser, app, curl)", evidence: [ev], props: {} });
   }
 
   private unknownNode(at: Node, reason: string): string {
@@ -209,16 +237,19 @@ class Analyzer {
       byEngine.set(engine, [...(byEngine.get(engine) ?? []), h]);
     }
     for (const [engine, all] of byEngine) {
-      // ORMs with one shared connection (every Mongoose model, every PrismaClient) are one database.
+      // ORMs with one shared connection (every Mongoose model, every PrismaClient) are one database;
+      // native-driver clients are shown as one more box, however many places create them.
       const shared = all.filter((h) => h.type === "mongoose-model" || h.type === "prisma");
-      const handles = [...all.filter((h) => !shared.includes(h)), ...shared.slice(0, 1)];
+      const native = all.filter((h) => h.type === "mongo-client");
+      const handles = [...all.filter((h) => !shared.includes(h) && !native.includes(h)), ...shared.slice(0, 1), ...native.slice(0, 1)];
       for (const h of handles) {
         const ev = this.ev(h.created);
         const isCache = engine === "redis";
         const base = isCache ? `cache:${engine}` : `db:${engine}`;
-        const id = handles.length === 1 ? base : `${base}@${ev.file}:${ev.line}`;
+        const id = handles.length === 1 ? base : h.type === "mongo-client" ? `${base}-driver` : `${base}@${ev.file}:${ev.line}`;
         this.resourceIds.set(h, id);
         if (shared.includes(h)) for (const other of shared) this.resourceIds.set(other, id);
+        if (native.includes(h)) for (const other of native) this.resourceIds.set(other, id);
         const poolMax = h.data.poolMax as number | undefined;
         const tables = (engine === "postgres" || engine === "mysql") && h.type !== "prisma" ? this.tablesProp() : undefined;
         const lib = h.lib;
@@ -250,7 +281,9 @@ class Analyzer {
 
   private addEdge(from: string, to: string, o: EdgeOpts): string {
     const ev = o.at instanceof Node ? this.ev(o.at) : o.at;
-    const id = `e:${shortHash(`${from}|${to}|${ev.file}:${ev.line}|${o.role ?? ""}`)}`;
+    // The position within the line keeps two calls on one line (a one-liner handler) apart.
+    const pos = o.at instanceof Node ? `:${o.at.getStart() - o.at.getStartLinePos()}` : "";
+    const id = `e:${shortHash(`${from}|${to}|${ev.file}:${ev.line}${pos}|${o.role ?? ""}`)}`;
     if (!this.edges.has(id)) {
       this.edges.set(id, {
         id, from, to, protocol: o.protocol, lifecycle: o.lifecycle, mode: o.mode, ...(o.label ? { label: o.label } : {}),
@@ -261,8 +294,8 @@ class Analyzer {
     return id;
   }
 
-  private inProcess(from: string, to: string, at: Node, props: Record<string, unknown> = {}, label?: string): string {
-    return this.addEdge(from, to, { protocol: "in-process", lifecycle: "none", mode: "sync", at, props, label });
+  private inProcess(from: string, to: string, at: Node, props: Record<string, unknown> = {}, label?: string, mode: "sync" | "async" = "sync"): string {
+    return this.addEdge(from, to, { protocol: "in-process", lifecycle: "none", mode, at, props, label });
   }
 
   // ---------------------------------------------------------- call graph
@@ -273,7 +306,7 @@ class Analyzer {
     const out: Step[] = [];
     this.steps.set(owner, out);
     for (const site of callSites(owner)) {
-      const op = classifyOp(this.r, site.call);
+      const op = classifyOp(this.r, site.call) ?? this.reqUserWrite(site.call);
       if (op) {
         out.push({ kind: "op", op, site });
         continue;
@@ -281,6 +314,10 @@ class Analyzer {
       if (!Node.isCallExpression(site.call)) continue;
       const calleeNode = site.call.getExpression();
       const v = this.r.value(calleeNode);
+      if (v.kind === "external" && v.pkg === "passport" && (v.path.join(".") === "authenticate" || v.path.join(".") === "authorize")) {
+        out.push({ kind: "passport", call: site.call, site });
+        continue;
+      }
       const fns = functionsOf(v).filter((f) => this.isUserCode(f));
       const paramIndex = isFunctionLike(owner) ? ownParamIndex(this.r, owner, calleeNode) : -1;
       if (paramIndex >= 0) {
@@ -303,6 +340,42 @@ class Analyzer {
     return out;
   }
 
+  /**
+   * `req.user.save()` (or `const { user } = req; user.save()`): with Passport, req.user is the document
+   * deserializeUser loaded, so this writes to that model's collection.
+   */
+  private reqUserWrite(call: CallExpression | NewExpression): Op | undefined {
+    if (!Node.isCallExpression(call)) return undefined;
+    const callee = call.getExpression();
+    if (!Node.isPropertyAccessExpression(callee) || !["save", "deleteOne", "updateOne", "remove"].includes(callee.getName())) return undefined;
+    if (!isReqUser(callee.getExpression())) return undefined;
+    const model = this.reqUserModel();
+    if (!model) return undefined;
+    const name = String(model.data.model ?? "document");
+    return { target: { type: "resource", handle: model.root }, protocol: "mongodb", lifecycle: "pooled", mode: "sync", label: `${callee.getName()} ${name} (req.user)`, props: { reqUser: true } };
+  }
+
+  /** The Mongoose model deserializeUser loads users from, if any. */
+  private reqUserModel(): Handle | undefined {
+    if (this.userModel !== undefined) return this.userModel ?? undefined;
+    this.userModel = null;
+    for (const call of this.r.calls()) {
+      if (!Node.isCallExpression(call)) continue;
+      const callee = this.r.value(call.getExpression());
+      if (callee.kind !== "external" || callee.pkg !== "passport" || callee.path.join(".") !== "deserializeUser") continue;
+      const fn = pick(this.r.value(call.getArguments()[0]), "function")?.node;
+      if (!fn) continue;
+      for (const site of callSites(fn)) {
+        const v = this.r.value((site.call as CallExpression).getExpression());
+        if (v.kind === "member" && v.handle.type === "mongoose-model") {
+          this.userModel = v.handle;
+          return v.handle;
+        }
+      }
+    }
+    return undefined;
+  }
+
   /** A function matters if it, or anything it calls, does I/O. */
   private significant(owner: Owner): boolean {
     const known = this.sig.get(owner);
@@ -321,7 +394,7 @@ class Analyzer {
     discover(owner);
     const local = new Map<Owner, boolean>();
     const get = (o: Owner) => this.sig.get(o) ?? local.get(o) ?? false;
-    for (const o of order) local.set(o, this.stepsOf(o).some((s) => s.kind === "op" || s.kind === "unresolved" || s.kind === "dispatch"));
+    for (const o of order) local.set(o, this.stepsOf(o).some((s) => s.kind === "op" || s.kind === "unresolved" || s.kind === "dispatch" || s.kind === "passport"));
     for (let changed = true; changed; ) {
       changed = false;
       for (const o of order) {
@@ -351,8 +424,17 @@ class Analyzer {
 
   /** `binding` is the call that entered `owner`, used to resolve callbacks passed as arguments. */
   private expand(flow: FlowState, owner: Owner, nodeId: string, binding?: CallExpression | NewExpression) {
-    if (flow.expanded.has(nodeId)) return;
-    flow.expanded.add(nodeId);
+    // A function called from two places makes its calls twice; only recursion and runaway flows stop it.
+    if (flow.active.has(nodeId) || flow.steps.length >= MAX_FLOW_STEPS) return;
+    flow.active.add(nodeId);
+    try {
+      this.expandSteps(flow, owner, nodeId, binding);
+    } finally {
+      flow.active.delete(nodeId);
+    }
+  }
+
+  private expandSteps(flow: FlowState, owner: Owner, nodeId: string, binding?: CallExpression | NewExpression) {
     for (const step of this.stepsOf(owner)) {
       const ctx = siteProps(step.site);
       if (step.kind === "op") {
@@ -366,7 +448,9 @@ class Analyzer {
             props: { ...ctx, serverAction: true },
           }));
         } else {
-          flow.push(this.inProcess(nodeId, callee, step.site.call, ctx));
+          // Calling an async function without awaiting it starts it and moves on.
+          const fireAndForget = step.site.awaited === false && returnsPromise(step.fn);
+          flow.push(this.inProcess(nodeId, callee, step.site.call, ctx, undefined, fireAndForget ? "async" : "sync"));
         }
         this.expand(flow, step.fn, callee, step.site.call);
       } else if (step.kind === "param") {
@@ -389,6 +473,8 @@ class Analyzer {
             `one of ${step.fns.length} handlers, chosen at runtime`));
           this.expand(flow, fn, callee);
         }
+      } else if (step.kind === "passport") {
+        this.passportStrategyEdges(flow, step.call, nodeId, undefined, ctx);
       } else {
         const unknown = this.unknownNode(step.site.call, step.reason);
         const edge = this.addEdge(nodeId, unknown, { protocol: "unknown", lifecycle: "unknown", mode: "sync", at: step.site.call, confidence: "unresolved", props: ctx });
@@ -401,7 +487,9 @@ class Analyzer {
   private expandOp(flow: FlowState, from: string, op: Op, site: CallSite, ctx: Record<string, unknown>) {
     const props = { ...op.props, ...ctx };
     const t = op.target;
-    const base = { protocol: op.protocol, lifecycle: op.lifecycle, mode: op.mode, label: op.label, at: site.call, props, role: op.role };
+    // Whether the caller waits is decided by the code (await, return, .then), not by the library.
+    const mode = op.role === "connect" || op.role === "push" ? op.mode : site.awaited === true ? "sync" : site.awaited === false ? "async" : op.mode;
+    const base = { protocol: op.protocol, lifecycle: op.lifecycle, mode, label: op.label, at: site.call, props, role: op.role };
     if (t.type === "url") {
       const resolved = this.resolveUrl(t.method, t.url);
       if (!resolved.route && t.envBase) {
@@ -470,32 +558,72 @@ class Analyzer {
       const id = this.elementNode(el, last, route);
       flow.push(this.inProcess(prev, id, el.registeredAt, el.wrappedBy ? { wrappedBy: el.wrappedBy } : {}));
       if (el.kind === "fn" && el.fn) this.expand(flow, el.fn, id);
-      if (el.kind === "lib" && el.handle) this.libraryEdges(flow, el.handle, id);
+      if (el.kind === "lib" && el.handle) this.libraryEdges(flow, el.handle, id, route);
       if (el.kind === "unknown") {
         this.addGap([id], "This middleware is not a plain function or a known library, so the parser cannot see what it does.", el.node);
       }
       prev = id;
     });
+    // express-session hooks res.end: before the response finishes it saves the session (or refreshes its expiry).
+    for (const el of route.chain) {
+      if (el.kind !== "lib" || !el.handle) continue;
+      const mwId = this.libMiddlewareNode(el.handle);
+      const w = this.sessionWrites.get(mwId);
+      if (!w) continue;
+      const cond = "the visitor has a session (a cookie came in, or this request created one)";
+      flow.push(this.addEdge(mwId, w.to, {
+        protocol: w.protocol, lifecycle: w.lifecycle, mode: "sync", at: w.at, label: "save the session (or refresh its expiry) as the response ends", role: "session-save",
+        props: { sessionStore: w.pkg, afterResponse: true, conditional: true, condition: cond, branch: "then", branchPath: [{ condition: cond, branch: "then" }] },
+      }));
+    }
   }
 
   private elementNode(el: ChainElement, last: boolean, route: Route): string {
     if (el.kind === "fn" && el.fn) {
+      let id: string;
       if (el.factoryCall) {
         const factory = el.factoryCall.split("(")[0]!.trim();
-        return this.fnNode(el.fn, last ? "handler" : "middleware", `${factory}(…) middleware`, true);
+        id = this.fnNode(el.fn, last ? "handler" : "middleware", `${factory}(…) middleware`, true);
+      } else {
+        // An anonymous or default export is best named by what the route file calls it (authGuard).
+        const local = Node.isIdentifier(el.node) ? el.node.getText() : undefined;
+        const unnamed = !functionName(el.fn) || functionName(el.fn) === "default";
+        const label = last ? `${route.method} ${route.path} ${route.page ? "page (server render)" : "handler"}` : unnamed && local ? local : unnamed ? `middleware (${relPath(this.repo, el.fn.getSourceFile())}:${el.fn.getStartLineNumber()})` : "middleware";
+        id = this.fnNode(el.fn, last ? "handler" : "middleware", label, route.framework === "next" || (!last && unnamed));
       }
-      const label = last ? `${route.method} ${route.path} ${route.page ? "page (server render)" : "handler"}` : "middleware";
-      return this.fnNode(el.fn, last ? "handler" : "middleware", label, route.framework === "next");
+      this.recordResponses(id, el.fn);
+      return id;
     }
     if (el.kind === "lib" && el.handle) return this.libMiddlewareNode(el.handle);
     return this.unknownNode(el.node, "Unknown middleware.");
   }
 
+  /** What a handler or middleware can answer (status codes per branch), shown in viewers. */
+  private recordResponses(nodeId: string, fn: FunctionLike) {
+    const node = this.nodes.get(nodeId);
+    if (!node || node.props.responses) return;
+    const responses = responsesOf(fn);
+    if (responses.length) node.props.responses = responses.slice(0, 12);
+  }
+
+  /** Error-handling middleware for a route: not on the normal path, but where every thrown error ends up. */
+  private errorHandlerNodes(route: Route): string[] {
+    return (route.errorHandlers ?? []).map((h) => {
+      const name = functionName(h.fn);
+      const id = this.fnNode(h.fn, "middleware", name ? undefined : `error handler (${relPath(this.repo, h.fn.getSourceFile())}:${h.fn.getStartLineNumber()})`);
+      const node = this.nodes.get(id)!;
+      node.props.errorHandler = true;
+      this.recordResponses(id, h.fn);
+      return id;
+    });
+  }
+
   /** Resources a library middleware uses internally, e.g. a Redis store for rate limits. */
-  private libraryEdges(flow: FlowState, h: Handle, mwId: string) {
+  private libraryEdges(flow: FlowState, h: Handle, mwId: string, route?: Route) {
     const created = h.created;
     if (h.data.name === "passport.session") this.passportSessionEdges(flow, mwId);
     if (!Node.isCallExpression(created)) return;
+    if (h.data.name === "passport.authenticate" || h.data.name === "passport.authorize") this.passportStrategyEdges(flow, created, mwId, route, {});
     if (h.data.name === "express-session") this.sessionStoreEdge(flow, created, mwId);
     for (const arg of created.getArguments()) {
       arg.forEachDescendant((n) => {
@@ -508,7 +636,7 @@ class Analyzer {
         const isRedis = handle.type === "redis-client";
         flow.push(this.addEdge(mwId, id, {
           protocol: isRedis ? "redis" : "sql", lifecycle: isRedis ? "persistent" : "pooled", mode: "sync", at,
-          label: isRedis ? "keep counters in Redis (shared by every instance)" : "store state in the database",
+          label: isRedis ? "count this request in Redis (the limit is shared by every instance)" : "store state in the database",
         }));
       });
     }
@@ -526,15 +654,89 @@ class Analyzer {
     const pkg = root ? pick(this.r.value(root), "external")?.pkg : undefined;
     const engine = pkg ? SESSION_STORES[pkg] : undefined;
     if (!engine) return;
-    const to = this.resourceForEngine(engine, init);
+    // connect-mongo given its own `mongoUrl` opens a second MongoClient: a separate pool from the app's.
+    const storeOpts = Node.isCallExpression(origin) ? this.r.value(origin.getArguments()[0]) : undefined;
+    const ownClient = pkg === "connect-mongo" && storeOpts?.kind === "object" && ["mongoUrl", "uri"].some((k) => this.r.member(storeOpts, k).kind !== "unknown");
+    const to = ownClient
+      ? this.addNode({ id: "db:mongodb-sessions", kind: "database", label: "MongoDB sessions (connect-mongo)", evidence: [this.ev(init)], props: { engine: "mongodb", library: "connect-mongo", ownConnection: true } })
+      : this.resourceForEngine(engine, init);
     const isRedis = engine === "redis";
+    const protocol = isRedis ? "redis" : engine === "mongodb" ? "mongodb" : "sql";
+    const lifecycle = isRedis ? "persistent" : "pooled";
+    const cond = "the request carries a session cookie";
     flow.push(this.addEdge(mwId, to, {
-      protocol: isRedis ? "redis" : engine === "mongodb" ? "mongodb" : "sql", lifecycle: isRedis ? "persistent" : "pooled", mode: "sync", at: init,
-      label: `load the session from ${engineLabel(engine)} on every request`, props: { sessionStore: pkg },
+      protocol, lifecycle, mode: "sync", at: init,
+      label: "read this visitor's session",
+      props: { sessionStore: pkg, conditional: true, condition: cond, branch: "then", branchPath: [{ condition: cond, branch: "then" }] },
     }));
+    this.sessionWrites.set(mwId, { to, protocol, lifecycle, at: init, pkg: pkg! });
+    // Facts for the session box: cookie name, lifetime and when it saves.
+    const mw = this.nodes.get(mwId);
+    if (mw && opts.kind === "object") {
+      const num = (k: string) => {
+        const v = this.r.member(opts, k);
+        return v.kind === "unknown" ? undefined : (opts.node as any).getProperty?.(k)?.getInitializer?.()?.getText();
+      };
+      for (const k of ["resave", "saveUninitialized", "name", "rolling"]) {
+        const t = num(k);
+        if (t !== undefined) mw.props[k] = t;
+      }
+    }
   }
 
-  /** passport.session() runs the deserializeUser callback for every request with a session. */
+  /** passport.use([name,] new XStrategy(options, verify)): strategy name -> package and verify callback. */
+  private passportStrategies(): Map<string, { pkg: string; verify?: FunctionLike; at: Node }> {
+    if (this.strategies) return this.strategies;
+    const out = new Map<string, { pkg: string; verify?: FunctionLike; at: Node }>();
+    for (const call of this.r.calls()) {
+      if (!Node.isCallExpression(call)) continue;
+      const callee = this.r.value(call.getExpression());
+      if (callee.kind !== "external" || callee.pkg !== "passport" || callee.path.join(".") !== "use") continue;
+      const args = call.getArguments();
+      const explicit = args.length > 1 ? stringValue(this.r.value(args[0])) : undefined;
+      const origin = this.r.originOf(args[args.length - 1]!);
+      if (!Node.isNewExpression(origin)) continue;
+      const ctor = this.r.value(origin.getExpression());
+      const pkg = ctor.kind === "external" ? ctor.pkg : "passport-strategy";
+      const fnArg = [...(origin.getArguments() ?? [])].reverse().find((a) => pick(this.r.value(a), "function"));
+      const verify = fnArg ? pick(this.r.value(fnArg), "function")?.node : undefined;
+      const name = explicit ?? defaultStrategyName(pkg);
+      out.set(name.toLowerCase(), { pkg, verify: verify && isFunctionLike(verify) ? verify : undefined, at: origin });
+    }
+    this.strategies = out;
+    return out;
+  }
+
+  /**
+   * passport.authenticate('name'): a password strategy runs its verify callback; an OAuth strategy either
+   * redirects the browser to the provider (start) or, on the callback route, swaps the code for a token,
+   * fetches the profile, then runs the verify callback.
+   */
+  private passportStrategyEdges(flow: FlowState, call: CallExpression, fromId: string, route: Route | undefined, ctx: Record<string, unknown>) {
+    const name = stringValue(this.r.value(call.getArguments()[0]))?.toLowerCase();
+    if (!name) return;
+    const strategy = this.passportStrategies().get(name);
+    if (!strategy) return;
+    const oauth = !/passport-(local|custom|jwt|http-bearer|headerapikey)/.test(strategy.pkg);
+    if (oauth) {
+      const host = PROVIDER_HOSTS[name] ?? `${name} OAuth provider`;
+      const ext = this.externalNode(`${name}-oauth`, host, strategy.at, `${cap(name)} OAuth (${host})`);
+      const isCallback = !!route && /callback|return/i.test(route.path);
+      if (!isCallback) {
+        // The start route only redirects; the browser goes to the provider's login page.
+        this.nodes.get(fromId)!.props.redirectsTo = `${cap(name)} login page (302, no server-side call)`;
+        return;
+      }
+      flow.push(this.addEdge(fromId, ext, { protocol: "http", lifecycle: "pooled", mode: "sync", at: call, label: "exchange the authorization code for an access token", props: { ...ctx, scheme: "https", oauth: "token" } }));
+      flow.push(this.addEdge(fromId, ext, { protocol: "http", lifecycle: "pooled", mode: "sync", at: strategy.at, label: "fetch the user's profile", props: { ...ctx, scheme: "https", oauth: "profile" } }));
+    }
+    if (!strategy.verify) return;
+    const verify = this.fnNode(strategy.verify, "service", `${name} strategy verify callback`, true);
+    flow.push(this.inProcess(fromId, verify, call, ctx, oauth ? "Passport runs the strategy's verify callback with the profile" : "Passport runs the strategy's verify callback (checks the credentials)"));
+    this.expand(flow, strategy.verify, verify);
+  }
+
+  /** passport.session() calls the deserializeUser callback, but only when the session belongs to a logged-in user. */
   private passportSessionEdges(flow: FlowState, mwId: string) {
     for (const call of this.r.calls()) {
       if (!Node.isCallExpression(call)) continue;
@@ -542,8 +744,9 @@ class Analyzer {
       if (callee.kind !== "external" || callee.pkg !== "passport" || callee.path.join(".") !== "deserializeUser") continue;
       const fn = pick(this.r.value(call.getArguments()[0]), "function")?.node;
       if (!fn) continue;
-      const handler = this.fnNode(fn, "middleware", "passport deserializeUser");
-      flow.push(this.inProcess(mwId, handler, call, {}, "passport loads the user for this session"));
+      const handler = this.fnNode(fn, "service", "passport deserializeUser (callback)", true);
+      const cond = "someone is logged in (the session holds a user id)";
+      flow.push(this.inProcess(mwId, handler, call, { conditional: true, condition: cond, branch: "then", branchPath: [{ condition: cond, branch: "then" }] }, "passport loads the logged-in user"));
       this.expand(flow, fn, handler);
     }
   }
@@ -622,10 +825,18 @@ class Analyzer {
     const proxy = this.infra.proxies[0];
     let proxyId: string | undefined;
     if (proxy && this.routes.length) {
+      // Only a proxy spreading traffic over several servers is a load balancer.
       proxyId = this.addNode({
         id: `proxy:${proxy.name}`, kind: "proxy", label: `${proxy.name} reverse proxy`,
-        evidence: [this.evAt(proxy.proxyPass.file, proxy.proxyPass.line)], concepts: ["load-balancer"],
-        props: { upstreams: proxy.upstreams, rateLimit: proxy.rateLimit ?? null },
+        evidence: [this.evAt(proxy.proxyPass.file, proxy.proxyPass.line)], concepts: proxy.upstreams.length > 1 ? ["load-balancer"] : [],
+        props: {
+          upstreams: proxy.upstreams, rateLimit: proxy.rateLimit ?? null,
+          ...(proxy.rateKey ? { rateKey: proxy.rateKey } : {}),
+          ...(proxy.burst !== undefined ? { burst: proxy.burst } : {}),
+          ...(proxy.nodelay !== undefined ? { nodelay: proxy.nodelay } : {}),
+          ...(proxy.limitReq ? { limitReqLine: proxy.limitReq.line } : {}),
+          upstreamKeepalive: proxy.upstreamKeepalive,
+        },
       });
     }
     for (const route of [...this.routes].sort((a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method))) {
@@ -633,10 +844,14 @@ class Analyzer {
       const client = this.clientNode();
       const routeId = this.routeNode(route);
       if (proxy && proxyId) {
-        flow.push(this.addEdge(client, proxyId, { protocol: "http", lifecycle: "pooled", mode: "sync", at: this.evAt(proxy.listen.file, proxy.listen.line), label: "request hits the proxy" }));
-        flow.push(this.addEdge(proxyId, routeId, { protocol: "http", lifecycle: "pooled", mode: "sync", at: this.evAt(proxy.proxyPass.file, proxy.proxyPass.line), label: "proxy_pass to the app" }));
+        flow.push(this.addEdge(client, proxyId, { protocol: "http", lifecycle: "keep-alive", mode: "sync", at: this.evAt(proxy.listen.file, proxy.listen.line), label: `${route.method} ${route.path}` }));
+        // Without upstream keepalive + HTTP/1.1, nginx opens a fresh connection to the app for every request.
+        flow.push(this.addEdge(proxyId, routeId, {
+          protocol: "http", lifecycle: proxy.upstreamKeepalive ? "pooled" : "new-per-request", mode: "sync",
+          at: this.evAt(proxy.proxyPass.file, proxy.proxyPass.line), label: "forwards the request to the app (proxy_pass)",
+        }));
       } else {
-        flow.push(this.addEdge(client, routeId, { protocol: "http", lifecycle: "pooled", mode: "sync", at: route.registeredAt, label: `${route.method} ${route.path}` }));
+        flow.push(this.addEdge(client, routeId, { protocol: "http", lifecycle: "keep-alive", mode: "sync", at: route.registeredAt, label: `${route.method} ${route.path}` }));
       }
       this.expandRoute(flow, route);
       this.addFlow(`flow:route:${route.method}:${route.path}`, `${route.method} ${route.path}${route.page ? " (page)" : ""}`, "client:http", flow, this.serviceOf(route.app));
@@ -742,15 +957,17 @@ class Analyzer {
       const ms = msNode ? numericValue(this.r, msNode) ?? intervalHint(this.r, msNode) : undefined;
       const ev = this.ev(call);
       const browser = this.clientFiles.has(call.getSourceFile());
+      // An anonymous callback is named by what it does first: "Every 5s: publishEvent('worker:heartbeat')".
+      const does = functionName(fn) ?? firstCallSummary(fn);
       const label = loop
         ? `Loop: ${functionName(fn) ?? "callback"} reschedules itself${ms !== undefined ? ` (${ms} ms when idle)` : ""}`
-        : `Every ${ms !== undefined ? formatMs(ms) : "N ms"}${browser ? " (browser)" : ""}`;
+        : `Every ${ms !== undefined ? formatMs(ms) : "N ms"}${browser ? " (browser)" : ""}${does ? `: ${does}` : ""}`;
       const timer = this.addNode({
         id: `timer:${ev.file}:${ev.line}`, kind: "timer", label, evidence: [ev],
         concepts: browser ? ["short-polling"] : [], props: { intervalMs: ms ?? null, loop, browser },
       });
       const flow = new FlowState();
-      const handler = this.fnNode(fn, "handler", "timer callback");
+      const handler = this.fnNode(fn, "handler", does ? `timer callback: ${does}` : "timer callback");
       flow.push(this.inProcess(timer, handler, call, {}, loop ? "runs again after the delay" : "fires on the interval"));
       this.expand(flow, fn, handler);
       this.addFlow(`flow:${timer}`, label, timer, flow, this.serviceOf(call));
@@ -829,7 +1046,9 @@ class Analyzer {
       if (!isInlineScript(file) && file.getStatements().some((s) => Node.isImportDeclaration(s))) continue;
       if (!this.significant(file)) continue;
       const rel = relPath(this.repo, file);
-      const firstCall = callSites(file)[0]?.call ?? file.getStatements()[0];
+      // Evidence: the first top-level call the page actually makes when it loads (e.g. `loadInitial();`).
+      const sites = callSites(file);
+      const firstCall = sites.find((c) => Node.isExpressionStatement(c.call.getParent()) && c.call.getParent()!.getParent() === file)?.call ?? sites[0]?.call ?? file.getStatements()[0];
       const ui = this.addNode({
         id: `ui:${rel}#load`, kind: "ui-event", label: `Page load: ${path.basename(rel)}`,
         evidence: [firstCall ? this.ev(firstCall) : this.evAt(rel, 1)], props: { event: "load" },
@@ -849,9 +1068,31 @@ class Analyzer {
 
   // ------------------------------------------------------------- services
 
+  /** `app.listen(...)` / `server.listen(...)`: where an HTTP server starts accepting connections. */
+  private listenCalls(): CallExpression[] {
+    const out: CallExpression[] = [];
+    for (const call of this.r.calls()) {
+      if (!Node.isCallExpression(call)) continue;
+      const callee = call.getExpression();
+      if (!Node.isPropertyAccessExpression(callee) || callee.getName() !== "listen") continue;
+      const h = pick(this.r.value(callee.getExpression()), "handle")?.handle;
+      if (h && (h.type === "express-app" || h.type === "http-server")) out.push(call);
+    }
+    return out;
+  }
+
   private buildServices() {
     const graph = this.moduleGraph();
-    for (const p of this.infra.processes) {
+    // No start script, Dockerfile or compose entry: the file that calls listen() is the server.
+    const processes = [...this.infra.processes];
+    if (!processes.length) {
+      const listen = this.listenCalls()[0];
+      if (listen) {
+        const file = relPath(this.repo, listen.getSourceFile());
+        processes.push({ name: path.basename(file).replace(/\.[^.]+$/, ""), file, evidence: { file, line: listen.getStartLineNumber() } } as (typeof processes)[number]);
+      }
+    }
+    for (const p of processes) {
       const start = this.repo.byPath.get(path.join(this.repo.root, p.file));
       if (!start) continue;
       const reach = reachable(graph, start);
@@ -931,9 +1172,23 @@ class Analyzer {
   }
 
   private finish(): TraceSpec {
+    // Which process a piece of code belongs to, by the file it lives in. Shared files (used by
+    // two processes) get the first; viewers follow the caller for code reached by a function call.
+    for (const n of this.nodes.values()) {
+      if (!OWNED_KINDS.has(n.kind) || n.props.service) continue;
+      const svc = n.evidence[0] ? this.fileServices.get(n.evidence[0].file) : undefined;
+      if (svc) n.props.service = svc;
+    }
     const pkg = this.repo.packageJson ?? {};
     const deps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
-    const known = ["express", "next", "react", "pg", "mysql2", "@prisma/client", "mongoose", "redis", "ioredis", "ws", "socket.io", "bullmq", "bull", "@aws-sdk/client-s3", "@supabase/supabase-js", "stripe", "openai"];
+    const known = [
+      "express", "next", "react", "pug", "ejs", "hbs",
+      "pg", "mysql2", "@prisma/client", "drizzle-orm", "mongoose", "mongodb", "redis", "ioredis",
+      "express-session", "connect-mongo", "connect-redis", "passport", "jsonwebtoken", "bcrypt", "bcryptjs", "@node-rs/bcrypt",
+      "express-rate-limit", "rate-limit-redis", "helmet", "cors", "lusca", "multer",
+      "ws", "socket.io", "bullmq", "bull", "nodemailer",
+      "@aws-sdk/client-s3", "@supabase/supabase-js", "stripe", "openai", "twilio", "@octokit/rest", "googleapis", "@langchain/groq", "@huggingface/inference",
+    ];
     const spec = {
       schemaVersion: "1",
       meta: {
@@ -966,13 +1221,40 @@ class Analyzer {
 
 class FlowState {
   steps: string[] = [];
-  used = new Set<string>();
+  /** Routes already expanded in this flow (a route reached twice is drawn once). */
   expanded = new Set<string>();
+  /** Functions being expanded right now, to stop recursion. */
+  active = new Set<string>();
   push(edgeId: string) {
-    if (this.used.has(edgeId)) return;
-    this.used.add(edgeId);
+    if (this.steps.at(-1) === edgeId) return;
     this.steps.push(edgeId);
   }
+}
+
+/** Past this many hops a flow stops expanding repeated calls. */
+const MAX_FLOW_STEPS = 400;
+
+/** An async function, or one that returns a call's result (likely a promise). */
+function returnsPromise(fn: FunctionLike): boolean {
+  if ("isAsync" in fn && typeof fn.isAsync === "function" && fn.isAsync()) return true;
+  const body = fn.getBody();
+  if (!body) return false;
+  if (!Node.isBlock(body)) return Node.isCallExpression(body) || Node.isAwaitExpression(body);
+  let found = false;
+  body.forEachDescendant((n, t) => {
+    if (isFunctionLike(n)) {
+      t.skip();
+      return;
+    }
+    if (Node.isReturnStatement(n)) {
+      const e = n.getExpression();
+      if (e && (Node.isCallExpression(e) || Node.isAwaitExpression(e))) {
+        found = true;
+        t.stop();
+      }
+    }
+  });
+  return found;
 }
 
 function functionsOf(v: Value): FunctionLike[] {
@@ -981,7 +1263,11 @@ function functionsOf(v: Value): FunctionLike[] {
   return [];
 }
 
+/** Methods of built-in strings, arrays, JSON and the like: never I/O, never "picked at runtime". */
+const BUILTIN_METHODS = new Set(["replace", "replaceAll", "split", "trim", "map", "filter", "reduce", "slice", "join", "toString", "toLowerCase", "toUpperCase", "includes", "indexOf", "forEach", "find", "findIndex", "some", "every", "push", "concat", "match", "matchAll", "test", "startsWith", "endsWith", "padStart", "padEnd", "keys", "values", "entries", "parse", "stringify", "toFixed", "sort", "at", "flat", "flatMap", "charAt", "substring", "repeat", "localeCompare", "getTime", "toISOString"]);
+
 function isDynamicCallee(r: Resolver, callee: Node): boolean {
+  if (Node.isPropertyAccessExpression(callee) && BUILTIN_METHODS.has(callee.getName())) return false;
   if (Node.isElementAccessExpression(callee)) return true;
   if (Node.isPropertyAccessExpression(callee) && Node.isElementAccessExpression(callee.getExpression())) return true;
   if (Node.isIdentifier(callee)) {
@@ -1064,6 +1350,13 @@ function siteProps(site: CallSite): Record<string, unknown> {
   if (site.parallel) p.parallel = true;
   if (site.errorPath) p.errorPath = true;
   if (site.conditional) p.conditional = true;
+  if (site.condition) p.condition = site.condition;
+  if (site.branch) p.branch = site.branch;
+  if (site.path.length) {
+    p.branchPath = site.path;
+    if (site.path.at(-1)!.guard) p.guard = true;
+  }
+  if (site.awaited === false) p.notAwaited = true;
   return p;
 }
 
@@ -1075,6 +1368,7 @@ function engineOf(h: Handle): string {
     case "mysql":
       return "mysql";
     case "mongoose-model":
+    case "mongo-client":
       return "mongodb";
     case "redis-client":
       return "redis";
@@ -1144,3 +1438,47 @@ function formatMs(ms: number): string {
 }
 
 export type { CallExpression, NewExpression };
+
+/** "publishEvent('worker:heartbeat')": the first thing a function calls, for naming anonymous callbacks. */
+function firstCallSummary(fn: FunctionLike): string | undefined {
+  for (const site of callSites(fn)) {
+    if (!Node.isCallExpression(site.call)) continue;
+    const callee = site.call.getExpression().getText().replace(/\s+/g, "");
+    if (/^(console|Math|JSON|Date|Object|Array|Promise)\b/.test(callee) || callee.length > 40) continue;
+    const arg = site.call.getArguments()[0];
+    const lit = arg && (Node.isStringLiteral(arg) || Node.isNoSubstitutionTemplateLiteral(arg)) ? arg.getText() : "";
+    return `${callee}(${lit})`;
+  }
+  return undefined;
+}
+
+/** passport-google-oauth20 -> "google", passport-github2 -> "github", passport-local -> "local". */
+function defaultStrategyName(pkg: string): string {
+  const known: Record<string, string> = { "passport-twitter": "twitter", "@superfaceai/passport-twitter-oauth2": "twitter", "passport-openidconnect": "openidconnect", "passport-oauth2": "oauth2", "passport-steam": "steam" };
+  if (known[pkg]) return known[pkg]!;
+  return pkg.replace(/^@[^/]+\//, "").replace(/^passport-/, "").replace(/-oauth\d*$|-strategy$|\d+$/g, "").replace(/-.*$/, "");
+}
+
+const PROVIDER_HOSTS: Record<string, string> = {
+  google: "oauth2.googleapis.com", github: "github.com", facebook: "graph.facebook.com", x: "api.x.com", twitter: "api.x.com",
+  linkedin: "www.linkedin.com", microsoft: "login.microsoftonline.com", discord: "discord.com", twitch: "id.twitch.tv", steam: "steamcommunity.com",
+  tumblr: "www.tumblr.com", quickbooks: "oauth.platform.intuit.com",
+};
+
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** `req.user`, or a variable that holds it (`const user = req.user`, `const { user } = req`). */
+function isReqUser(expr: Node): boolean {
+  const text = expr.getText().replace(/\s+/g, "");
+  if (text === "req.user" || text === "request.user") return true;
+  if (!Node.isIdentifier(expr)) return false;
+  for (const decl of expr.getSymbol()?.getDeclarations() ?? []) {
+    if (Node.isVariableDeclaration(decl) && decl.getInitializer()?.getText().replace(/\s+/g, "") === "req.user") return true;
+    if (Node.isBindingElement(decl)) {
+      const holder = decl.getFirstAncestor((a) => Node.isVariableDeclaration(a));
+      const key = decl.getPropertyNameNode()?.getText() ?? decl.getName();
+      if (holder && Node.isVariableDeclaration(holder) && holder.getInitializer()?.getText() === "req" && key === "user") return true;
+    }
+  }
+  return false;
+}

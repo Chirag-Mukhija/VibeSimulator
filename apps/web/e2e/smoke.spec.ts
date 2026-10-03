@@ -22,7 +22,7 @@ test("a flow plays hop by hop with code evidence", async ({ page }) => {
 
 test("findings link back into the flow", async ({ page }) => {
   await page.goto("/#/repo/job-scheduler?tab=findings");
-  await expect(page.getByTestId("finding")).toHaveCount(9);
+  await expect(page.getByTestId("finding")).toHaveCount(8);
   const card = page.getByTestId("finding").filter({ hasText: "Each pushed message" });
   await card.getByRole("button", { name: "Show in flow" }).click();
   await expect(page.getByTestId("flow-title")).toHaveText("On \"job:events\" message");
@@ -76,7 +76,7 @@ test("the deep-dive drawer embeds the concept's simulation", async ({ page }) =>
 test("the overview explains the repo and runs the guided tour", async ({ page }) => {
   await page.goto("/#/repo/job-scheduler");
   const overview = page.getByTestId("overview");
-  await expect(overview).toContainText("6 HTTP routes across 2 processes");
+  await expect(overview).toContainText("6 HTTP routes in the api process, plus a separate worker process");
   await expect(overview).toContainText("Talking points");
   await expect(page.getByTestId("tour-stop")).toHaveCount(5);
   await page.getByTestId("start-tour").click();
@@ -90,7 +90,8 @@ test("the overview explains the repo and runs the guided tour", async ({ page })
 test("the open-source gallery repo loads", async ({ page }) => {
   await page.goto("/#/repo/hackathon-starter?tab=flows&flow=flow%3Aroute%3APOST%3A%2Fsignup");
   await expect(page.getByTestId("flow-title")).toHaveText("POST /signup");
-  await expect(page.locator(".lifeline-head").filter({ hasText: "MongoDB" })).toHaveCount(1);
+  // The app's MongoDB (Mongoose) and connect-mongo's separate session store.
+  await expect(page.locator(".lifeline-head").filter({ hasText: "MongoDB" })).toHaveCount(2);
 });
 
 test("scale mode finds the bottleneck and a what-if relieves it", async ({ page }) => {

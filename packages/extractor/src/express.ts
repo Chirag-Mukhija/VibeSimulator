@@ -27,6 +27,8 @@ export interface Route {
   framework: "express" | "next";
   /** Next.js server-component page rather than an API handler. */
   page?: boolean;
+  /** Error-handling middleware (4 parameters) that answers when anything in the chain throws or calls next(err). */
+  errorHandlers?: { fn: FunctionLike; registeredAt: Node }[];
 }
 
 interface Registration {
@@ -75,12 +77,28 @@ export function extractExpressRoutes(r: Resolver): Route[] {
 
   const routes: Route[] = [];
   const apps = [...regs.keys()].filter((h) => h.type === "express-app");
-  for (const app of apps) walk(r, regs, app, app, "", [], routes, new Set());
+  for (const app of apps) {
+    const errors: ErrorEntry[] = [];
+    const appRoutes: Route[] = [];
+    walk(r, regs, app, app, "", [], appRoutes, new Set(), errors);
+    // Error handlers are registered after the routes they cover, so attach them once the walk is done.
+    for (const route of appRoutes) {
+      const handlers = errors.filter((e) => matches(e.prefix, route.path)).map(({ fn, registeredAt }) => ({ fn, registeredAt }));
+      if (handlers.length) route.errorHandlers = handlers;
+    }
+    routes.push(...appRoutes);
+  }
   return routes;
 }
 
 interface StackEntry {
   element: ChainElement;
+  prefix: string;
+}
+
+interface ErrorEntry {
+  fn: FunctionLike;
+  registeredAt: Node;
   prefix: string;
 }
 
@@ -93,6 +111,7 @@ function walk(
   inherited: StackEntry[],
   out: Route[],
   visiting: Set<Handle>,
+  errors: ErrorEntry[],
 ) {
   if (visiting.has(handle)) return;
   visiting.add(handle);
@@ -113,7 +132,12 @@ function walk(
         const v = valueAt(i);
         const sub = pick(v, "handle")?.handle;
         if (sub && (sub.type === "express-router" || sub.type === "express-app") && regs.has(sub)) {
-          walk(r, regs, app, sub, at, stack, out, visiting);
+          walk(r, regs, app, sub, at, stack, out, visiting, errors);
+          continue;
+        }
+        const errorFn = pick(v, "function")?.node;
+        if (errorFn && isFunctionLike(errorFn) && isErrorHandler(errorFn)) {
+          errors.push({ fn: errorFn, registeredAt: reg.call, prefix: at });
           continue;
         }
         const el = element(r, args[i]!, reg.call, reg.values ? v : undefined);
@@ -128,6 +152,8 @@ function walk(
       routePath = first.value;
       offset = 1;
     }
+    // `app.get('port')` reads a setting; a route needs a path and at least one handler.
+    if (args.length <= offset || !/^[/*]/.test(routePath)) continue;
     const full = joinUrlPath(prefix, routePath);
     const chain: ChainElement[] = stack.filter((s) => matches(s.prefix, full)).map((s) => s.element);
     for (let i = offset; i < args.length; i++) {

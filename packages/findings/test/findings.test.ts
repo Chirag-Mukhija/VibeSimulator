@@ -16,25 +16,29 @@ const summary = (spec: TraceSpec) =>
 /** Reviewed by hand against each repo's code: every entry is a real issue. */
 const EXPECTED: Record<string, string[]> = {
   paytmentgateway: [
+    "check-then-insert @ src/services/paymentService.js:21",
     "db-per-request-middleware @ src/middleware/auth.js:15",
     "unbounded-query @ src/services/paymentService.js:67",
   ],
   instabackend: [
+    "bulk-insert-params @ src/services/feed.service.js:18",
+    "check-then-insert @ src/services/user.service.js:43",
+    "redis-check-then-act @ src/services/token.service.js:30",
     "redundant-index @ src/db/migrations/001_create_users_table.sql:12",
     "redundant-index @ src/db/migrations/001_create_users_table.sql:13",
+    "sort-without-index @ src/services/post.service.js:59",
     "threadpool-saturation @ src/utils/password.js:6",
     "threadpool-saturation @ src/utils/password.js:8",
     "unbounded-query @ src/services/follow.service.js:105",
   ],
   "job-scheduler": [
     "db-call-in-loop @ api/services/queueService.js:56",
-    "db-call-in-loop @ api/services/queueService.js:61",
-    "db-call-in-loop @ api/services/queueService.js:69",
+    "dual-write @ api/services/redisQueue.js:12",
     "full-table-aggregate @ api/routes/stats.js:10",
     "polling-via-timer @ api/public/dashboard.html:146",
-    "polling-with-push @ api/public/dashboard.html:146",
-    "push-triggers-fetch @ api/public/dashboard.html:111",
+    "push-triggers-fetch @ api/public/dashboard.html:140",
     "redundant-index @ api/db/migrations/001_create_jobs_table.sql:14",
+    "sort-without-index @ api/services/queueService.js:32",
     "worker-idle-polling @ worker/index.js:29",
   ],
   "next-prisma-app": [
@@ -44,6 +48,7 @@ const EXPECTED: Record<string, string[]> = {
     "polling-via-timer @ components/Feed.tsx:11",
   ],
   "express-ts-mongo": [
+    "connection-per-request @ src/services/mailer.ts:6",
     "cpu-blocking-event-loop @ src/routes/auth.ts:13",
     "external-call-in-request-path @ src/services/shipping.ts:11",
     "external-call-in-request-path @ src/services/shipping.ts:6",
@@ -170,6 +175,34 @@ app.get('/b', async (req, res) => { hits.set(req.ip, (hits.get(req.ip) ?? 0) + 1
     const state = spec.findings.filter((f) => f.rule === "in-memory-state");
     expect(state).toHaveLength(1);
     expect(state[0]!.data.names).toEqual(["hits"]);
+  });
+
+  it("check-then-insert: fires for SELECT-then-INSERT on a unique key, not with ON CONFLICT", () => {
+    const files = (insert: string) => ({
+      "package.json": PKG,
+      "schema.sql": "CREATE TABLE users (id SERIAL PRIMARY KEY, email TEXT UNIQUE);",
+      "app.js": `const express = require('express'); const { Pool } = require('pg'); const pool = new Pool();
+const app = express();
+app.post('/users', async (req, res) => {
+  const existing = await pool.query('SELECT id FROM users WHERE email = $1', [req.body.email]);
+  if (existing.rows.length) return res.status(409).json({ error: 'taken' });
+  const r = await pool.query('${insert}', [req.body.email]);
+  res.status(201).json(r.rows[0]);
+});`,
+    });
+    expect(rules(mini(files("INSERT INTO users (email) VALUES ($1) RETURNING *")))).toContain("check-then-insert");
+    expect(rules(mini(files("INSERT INTO users (email) VALUES ($1) ON CONFLICT (email) DO NOTHING RETURNING *")))).not.toContain("check-then-insert");
+  });
+
+  it("redis-check-then-act: EXISTS then DEL on the same key, not a single DEL", () => {
+    const files = (body: string) => ({
+      "package.json": JSON.stringify({ dependencies: { express: "4", ioredis: "5" } }),
+      "app.js": `const express = require('express'); const Redis = require('ioredis'); const redis = new Redis();
+const app = express();
+app.post('/redeem', async (req, res) => { ${body} res.send('ok'); });`,
+    });
+    expect(rules(mini(files("if (!(await redis.exists(`code:${req.body.code}`))) return res.sendStatus(401); await redis.del(`code:${req.body.code}`);")))).toContain("redis-check-then-act");
+    expect(rules(mini(files("if ((await redis.del(`code:${req.body.code}`)) !== 1) return res.sendStatus(401);")))).not.toContain("redis-check-then-act");
   });
 
   it("websocket-no-backplane: quiet when socket.io has an adapter", () => {

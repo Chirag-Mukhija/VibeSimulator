@@ -16,40 +16,40 @@
       {
         "title": "A job is submitted",
         "flow": "flow:route:POST:/jobs",
-        "body": "The API writes the job to Postgres (the durable record), adds its id to a Redis sorted set scored by run time (the fast index of what is due), and publishes job:created for the dashboards."
+        "body": "POST /jobs checks the body (400 for a bad type, priority or delay), writes the job to Postgres as the durable record, adds its id to the Redis sorted set for its priority tier (scored by run time, so Redis can find what's due), publishes job:created, and answers 201 with the row. The Postgres write and the Redis write are separate steps: if Redis fails between them, the job exists but no worker will ever pick it up."
       },
       {
         "title": "A worker claims work",
         "flow": "flow:timer:worker/index.js:29",
-        "body": "The worker asks Redis for the earliest due job in each of 10 priority tiers, claims it with a guarded UPDATE (WHERE status = 'pending') so two workers can't take the same job, runs one of two handlers picked by job type, then completes it or schedules a retry with backoff."
+        "body": "The worker checks the 10 priority tiers in order, 0 first, and takes the earliest due job from the first tier that has one; when nothing is due, that's 10 Redis checks and no SQL. It claims the job with a guarded UPDATE (WHERE status = 'pending') so two workers can't both take it, removes it from Redis, and runs the handler for its type (send_email or resize_image, both stubs that only log). Then it marks the job completed, schedules a retry after 5 s, 10 s, 20 s and so on, or dead-letters it as 'failed' once its attempts run out."
       },
       {
         "title": "How the dashboard stays live",
         "flow": "flow:topic:job:events:42",
-        "body": "Workers publish events on the Redis channel job:events. The API process subscribes and pushes each event over every open WebSocket, and then every dashboard calls GET /stats again. That last step is what a scale finding flags."
+        "body": "Both the API (job:created) and the workers (claimed, completed, failed, and a heartbeat every 5 s) publish on the Redis channel job:events. The API listens on a dedicated Redis connection and pushes every event to each open WebSocket. The page updates its job table from the message itself, then calls GET /stats again for counts and worker status, for every message, heartbeats included. That refetch is what a scale finding flags."
       },
       {
         "title": "The page also polls",
         "flow": "flow:timer:api/public/dashboard.html:146",
-        "body": "On top of the live socket, the dashboard re-fetches /stats every 5 seconds."
+        "body": "On top of the live socket, the dashboard re-fetches /stats every 5 seconds. GET /stats counts jobs per status over the whole table and adds worker presence from the API's memory, where a worker heard from in the last 15 s counts as online."
       },
       {
         "title": "Workers announce themselves",
         "flow": "flow:timer:worker/index.js:36",
-        "body": "Every 5 seconds each worker publishes a heartbeat; the API keeps the last-seen time in memory to show which workers are online."
+        "body": "Every 5 seconds each worker publishes worker:heartbeat without waiting for it (a failure is only logged). The API's subscriber records the last-seen time in its own memory, which GET /stats reads; that record is lost whenever the API restarts."
       }
     ],
     "stats": {
       "routes": 6,
       "flows": 11,
-      "findings": 9,
+      "findings": 8,
       "high": 0
     }
   },
   {
     "id": "instabackend",
     "title": "InstaBackend",
-    "tagline": "An Instagram-style API: JWT auth with Redis sessions, S3 presigned uploads, fan-out feeds and keyset pagination behind Nginx.",
+    "tagline": "An Instagram-style API: JWT access tokens with refresh sessions in Redis, S3 presigned uploads, fan-out feeds and keyset pagination behind Nginx.",
     "repoUrl": "https://github.com/Chirag-Mukhija/InstaBackend",
     "author": "Chirag Mukhija",
     "stack": [
@@ -63,40 +63,40 @@
       {
         "title": "Signing up",
         "flow": "flow:route:POST:/api/auth/register",
-        "body": "Nginx forwards the request and six library middleware run, including a rate limiter that keeps its counters in Redis. The service checks email and username, hashes the password with bcrypt on libuv's thread pool, inserts the user and stores a refresh-token session in Redis."
+        "body": "Nginx checks its per-IP limit and forwards the request; five library middleware run, then the auth limiter counts the request in Redis (20 per 15 minutes per IP, shared by register, login and refresh). The service checks that the email and username are free, hashes the password with bcrypt at work factor 12 (about 260 ms on libuv's thread pool, which the request waits for), inserts the user, and stores a refresh-token session in Redis for 7 days."
       },
       {
         "title": "Publishing a post fans it out",
         "flow": "flow:route:POST:/api/posts",
-        "body": "Creating a post also copies it into every follower's feed (fan-out on write): one query fetches all follower ids with no limit, then one bulk INSERT. Cheap for most users, heavy for someone with a million followers."
+        "body": "Creating a post also copies it into every follower's feed (fan-out on write): one query fetches all follower ids, then one INSERT with two parameters per follower. That's fine for most users, but Postgres allows at most 65,535 parameters per statement, so above about 32,000 followers the INSERT fails, after the post itself was already saved outside any transaction."
       },
       {
         "title": "Reading the precomputed feed",
         "flow": "flow:route:GET:/api/feed/fanout-write",
-        "body": "This reads the feed_items rows written at post time. Compare it with GET /api/feed/fanout-read, which joins follows and posts on every read instead."
+        "body": "This reads the feed_items rows written at post time, so a read is one indexed query. Compare it with GET /api/feed/fanout-read, which joins follows and posts on every read instead."
       },
       {
         "title": "Uploads skip the API",
         "flow": "flow:route:POST:/api/uploads/presign",
-        "body": "The server signs an S3 upload URL locally, with no network call at all, and the browser sends the image straight to S3."
+        "body": "The server signs an S3 upload URL locally, with no network call at all, and the browser sends the image straight to S3 with it. The server never contacts S3."
       },
       {
         "title": "A profile is four queries",
         "flow": "flow:route:GET:/api/users/:username",
-        "body": "Loading a profile runs one lookup, then three COUNT queries in parallel with Promise.all."
+        "body": "Loading a profile runs one lookup, then three COUNT queries in parallel with Promise.all, so it waits for the slowest of the three rather than all of them in a row."
       }
     ],
     "stats": {
       "routes": 31,
       "flows": 31,
-      "findings": 5,
+      "findings": 9,
       "high": 0
     }
   },
   {
     "id": "paytmentgateway",
     "title": "Payment Gateway",
-    "tagline": "Idempotent payments on Postgres: API-key auth on every request, and each payment plus its first audit event in one transaction.",
+    "tagline": "Idempotent payments on Postgres: API-key auth on every /payments request, and each payment plus its first audit event in one transaction.",
     "repoUrl": "https://github.com/Chirag-Mukhija/PaytmentGateway",
     "author": "Chirag Mukhija",
     "stack": [
@@ -107,23 +107,23 @@
       {
         "title": "Creating a payment",
         "flow": "flow:route:POST:/payments",
-        "body": "Auth looks up the merchant by API key on every request. The idempotency key is checked, then the payment and its first audit event are written in one transaction on a dedicated connection: BEGIN, two INSERTs, COMMIT (ROLLBACK on error), and the connection goes back to the pool."
+        "body": "Auth looks up the merchant by API key (401 if the header is missing or unknown) and the body is validated (400). If this merchant already used the idempotency key, the stored payment comes back with 201 and X-Idempotent-Replay: true, and nothing is written. Otherwise the payment and its first audit event are written in one transaction on one checked-out connection: BEGIN, two INSERTs, COMMIT (ROLLBACK on error), and the connection is released in finally. If two requests with the same key race past the check, the UNIQUE (merchant_id, idempotency_key) constraint makes the second INSERT fail, and that request gets 409."
       },
       {
         "title": "Reading a payment",
         "flow": "flow:route:GET:/payments/:id",
-        "body": "Two queries: the payment by id, then its full event history."
+        "body": "After the auth lookup, two queries: the payment by id, filtered to this merchant (another merchant's id gets 404), then its events. Today every payment has exactly one event, INITIATED."
       },
       {
         "title": "Listing payments",
         "flow": "flow:route:GET:/payments",
-        "body": "LIMIT/OFFSET pagination capped at 100 rows, served by the (merchant_id, created_at) index from the schema."
+        "body": "LIMIT/OFFSET pagination: 20 rows by default, at most 100, newest first. The (merchant_id, created_at) index serves the order, but a deep offset still makes Postgres walk past every skipped row."
       }
     ],
     "stats": {
       "routes": 4,
       "flows": 4,
-      "findings": 2,
+      "findings": 3,
       "high": 0
     }
   },
@@ -145,29 +145,29 @@
       {
         "title": "Signing up",
         "flow": "flow:route:POST:/signup",
-        "body": "Fifteen middleware run before the handler, including express-session loading the session from MongoDB and Passport loading the user. The handler checks for an existing user, saves the new one, and may email a sign-in link (opening a new SMTP transport for each email)."
+        "body": "Fifteen middleware run first. Among them, express-session loads the visitor's session from MongoDB (if the browser sent a cookie) and the CSRF check verifies the form token; Passport finds no logged-in user, so it skips the user lookup. The handler looks up the email. If it's taken, it emails a sign-in link to that account (a new SMTP connection per email). Otherwise it saves the new user, and a pre-save hook hashes the password with bcrypt first. The session is written back to MongoDB as the response ends."
       },
       {
         "title": "Waiting on someone else's API",
         "flow": "flow:route:GET:/api/nyt",
-        "body": "This request waits on the New York Times API, with no timeout set."
+        "body": "This page waits on the New York Times API with no timeout set; Node's fetch then waits about 5 minutes before giving up. The list changes weekly, so caching the response would remove the wait for almost every visitor."
       },
       {
         "title": "Charging a card",
         "flow": "flow:route:POST:/api/stripe",
-        "body": "Stripe is called inside the request, so checkout speed depends on Stripe's."
+        "body": "The browser gets a one-time card token from Stripe, so card details never reach this server; the server sends that token to Stripe's Charges API and waits. Only a declined card is handled as an error: any other failure (a bad key, a network error) is shown to the user as a successful charge."
       },
       {
         "title": "Changing a password",
         "flow": "flow:route:POST:/account/password",
-        "body": "isAuthenticated guards the route; the handler loads the user and saves the new password."
+        "body": "isAuthenticated guards the route. The handler loads the user again (req.user already holds it), sets the new password, and save() runs a pre-save hook that hashes it with bcrypt (work factor 10) before updating MongoDB."
       }
     ],
     "stats": {
-      "routes": 106,
-      "flows": 106,
-      "findings": 43,
-      "high": 0
+      "routes": 101,
+      "flows": 101,
+      "findings": 32,
+      "high": 3
     }
   }
 ]

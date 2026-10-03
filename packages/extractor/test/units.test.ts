@@ -7,13 +7,14 @@ import { parseNginx } from "../src/infra.ts";
 
 describe("summarizeSql", () => {
   it.each([
-    ["SELECT * FROM payments WHERE id = $1 AND merchant_id = $2", "SELECT payments", { singleRow: true, hasLimit: false }],
-    ["select follower_id from follows where followee_id = $1", "SELECT follows", { singleRow: false, hasLimit: false }],
+    ["SELECT * FROM payments WHERE id = $1 AND merchant_id = $2", "SELECT payments by id + merchant_id", { singleRow: true, hasLimit: false }],
+    ["select follower_id from follows where followee_id = $1", "SELECT follows by followee_id", { singleRow: false, hasLimit: false }],
     ["INSERT INTO jobs (type) VALUES ($1) RETURNING *", "INSERT jobs", {}],
-    ["UPDATE jobs SET status = 'x' WHERE id = $1", "UPDATE jobs", { singleRow: true }],
-    ["DELETE FROM likes WHERE user_id = $1", "DELETE likes", {}],
-    ["SELECT status, count(*)::int AS count FROM jobs GROUP BY status", "SELECT jobs", { aggregate: true }],
-    ["SELECT * FROM jobs ORDER BY id DESC LIMIT $1 OFFSET $2", "SELECT jobs", { hasLimit: true }],
+    ["INSERT INTO likes (a, b) VALUES ($1, $2) ON CONFLICT DO NOTHING", "INSERT likes (skip duplicates)", {}],
+    ["UPDATE jobs SET status = 'x' WHERE id = $1", "UPDATE jobs SET status='x' by id", { singleRow: true }],
+    ["DELETE FROM likes WHERE user_id = $1", "DELETE likes by user_id", {}],
+    ["SELECT status, count(*)::int AS count FROM jobs GROUP BY status", "COUNT jobs per status", { aggregate: true }],
+    ["SELECT * FROM jobs ORDER BY id DESC LIMIT $1 OFFSET $2", "SELECT jobs, page (LIMIT/OFFSET)", { hasLimit: true }],
     ["BEGIN", "BEGIN", {}],
     ["-- comment\nWITH x AS (SELECT 1) SELECT * FROM x", "SELECT x", {}],
   ])("%s", (sql, label, flags) => {
