@@ -1,0 +1,12 @@
+# Drizzle ORM over a pg Pool, labeled before Drizzle support was written.
+# Drizzle queries run on the pool they were given, so they land on the pool's database node.
+route GET /api/users @ app/api/users/route.ts:3
+chain GET /api/users = fn:app/api/users/route.ts#GET @ app/api/users/route.ts:3
+route POST /api/users @ app/api/users/route.ts:8
+chain POST /api/users = fn:app/api/users/route.ts#POST @ app/api/users/route.ts:8
+route DELETE /api/users/:id @ app/api/users/[id]/route.ts:4
+chain DELETE /api/users/:id = fn:app/api/users/[id]/route.ts#DELETE @ app/api/users/[id]/route.ts:4
+
+edge fn:app/api/users/route.ts#GET -> db:postgres @ app/api/users/route.ts:4
+edge fn:app/api/users/route.ts#POST -> db:postgres @ app/api/users/route.ts:10
+edge fn:app/api/users/[id]/route.ts#DELETE -> db:postgres @ app/api/users/[id]/route.ts:5

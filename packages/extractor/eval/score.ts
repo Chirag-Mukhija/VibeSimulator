@@ -22,9 +22,22 @@ function norm(id: string): string {
   return t;
 }
 
+export interface Truth {
+  edges: EdgeKey[];
+  /** Flow labels to score; empty means the whole repo. */
+  scope: string[];
+  repo?: { url: string; commit: string };
+}
+
 export function parseTruth(path: string): EdgeKey[] {
+  return readTruth(path).edges;
+}
+
+export function readTruth(path: string): Truth {
   const vars: Record<string, string> = {};
   const edges: EdgeKey[] = [];
+  const scope: string[] = [];
+  let repo: Truth["repo"];
   let proxy: { node: string; clientAt: string; routeAt: string } | undefined;
   const lines = readFileSync(path, "utf8").split("\n");
   for (const [i, raw] of lines.entries()) {
@@ -35,6 +48,10 @@ export function parseTruth(path: string): EdgeKey[] {
     let m: RegExpExecArray | null;
     if ((m = /^let (\w+) = (.*)$/.exec(line))) {
       vars[m[1]!] = m[2]!;
+    } else if ((m = /^scope (.+)$/.exec(line))) {
+      scope.push(m[1]!.trim());
+    } else if ((m = /^repo (\S+) (\S+)$/.exec(line))) {
+      repo = { url: m[1]!, commit: m[2]! };
     } else if ((m = /^proxy (\S+) client@(\S+) route@(\S+)$/.exec(line))) {
       proxy = { node: m[1]!, clientAt: m[2]!, routeAt: m[3]! };
       edges.push({ from: "client:http", to: proxy.node, at: proxy.clientAt });
@@ -56,13 +73,17 @@ export function parseTruth(path: string): EdgeKey[] {
       throw fail("unrecognized line");
     }
   }
-  return dedupe(edges);
+  return { edges: dedupe(edges), scope, repo };
 }
 
-export function extractedEdges(spec: TraceSpec): { verified: EdgeKey[]; unresolved: number } {
+export function extractedEdges(spec: TraceSpec, scope: string[] = []): { verified: EdgeKey[]; unresolved: number } {
   const verified: EdgeKey[] = [];
   let unresolved = 0;
+  const inScope = scope.length
+    ? new Set(spec.flows.filter((f) => scope.includes(f.label)).flatMap((f) => f.steps.map((s) => s.edge)))
+    : undefined;
   for (const e of spec.edges) {
+    if (inScope && !inScope.has(e.id)) continue;
     if (e.confidence === "unresolved") {
       unresolved++;
       continue;
@@ -95,8 +116,8 @@ export interface Score {
   byCategory: Record<Category, { truth: number; extracted: number; matched: number }>;
 }
 
-export function score(truth: EdgeKey[], spec: TraceSpec): Score {
-  const { verified, unresolved } = extractedEdges(spec);
+export function score(truth: EdgeKey[], spec: TraceSpec, scope: string[] = []): Score {
+  const { verified, unresolved } = extractedEdges(spec, scope);
   const t = new Set(truth.map(keyString));
   const x = new Set(verified.map(keyString));
   const missing = truth.filter((e) => !x.has(keyString(e)));

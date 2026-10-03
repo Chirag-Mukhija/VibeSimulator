@@ -22,10 +22,12 @@ export type HandleType =
   | "s3-client"
   | "prisma"
   | "mongoose-model"
+  | "mongoose-doc"
   | "bull-queue"
   | "http-client" // axios instance
   | "sdk-client" // stripe, openai, ...
   | "supabase"
+  | "drizzle"
   | "browser-ws"
   | "event-source"
   | "express-req"
@@ -45,7 +47,7 @@ export interface Handle {
 export type Value =
   | { kind: "function"; node: FunctionLike }
   | { kind: "module"; file: SourceFile }
-  | { kind: "external"; pkg: string; path: string[] }
+  | { kind: "external"; pkg: string; path: string[]; spec?: string }
   | { kind: "global"; path: string[] }
   | { kind: "object"; node: Node }
   | { kind: "handle"; handle: Handle }
@@ -53,6 +55,8 @@ export type Value =
   | { kind: "string"; value: string; template: boolean }
   | { kind: "collection"; decl: Node }
   | { kind: "class"; node: Node }
+  /** Return value of a call into a package we have no model for. */
+  | { kind: "result"; pkg: string; path: string[]; call: Node }
   | { kind: "instance"; cls: Node }
   | { kind: "choice"; options: Value[] }
   | { kind: "unknown" };
@@ -319,7 +323,9 @@ export class Resolver {
         const recv = (parent.getExpression() as any).getExpression?.() as Node | undefined;
         return this.elementOf(this.value(recv));
       }
-      return UNKNOWN;
+      // cache(fn) / asyncHandler(fn): the wrapped function is called by whoever calls the wrapper's result.
+      const wrapped = pick(this.value(parent), "function");
+      if (wrapped?.node !== fn) return UNKNOWN;
     }
     const values = this.callersOf(fn).map((call) => this.value(call.getArguments()[index]));
     return choice(values);
@@ -344,6 +350,14 @@ export class Resolver {
     const created = this.hooks.create(this, call, callee, false);
     if (created) return { kind: "handle", handle: created };
     if (callee.kind === "member") return this.hooks.callMember(this, callee.handle, callee.path, call) ?? UNKNOWN;
+    if (callee.kind === "external") {
+      // cache(fn), unstable_cache(fn), asyncHandler(fn), debounce(fn): a library
+      // higher-order function hands back a wrapped version of the function.
+      const first = call.getArguments()[0];
+      const fn = first ? pick(this.value(first), "function") : undefined;
+      if (fn) return fn;
+      return { kind: "result", pkg: callee.pkg, path: callee.path, call };
+    }
     if (callee.kind === "function") return this.returnValue(callee.node);
     if (callee.kind === "choice") {
       return choice(callee.options.map((o) => (o.kind === "function" ? this.returnValue(o.node) : UNKNOWN)));
@@ -363,6 +377,68 @@ export class Resolver {
     const cls = pick(callee, "class");
     if (cls) return { kind: "instance", cls: cls.node };
     return UNKNOWN;
+  }
+
+  /**
+   * The expression a name was defined as, following identifiers, object
+   * properties and module exports: `userController.createUser` ->
+   * `catchAsync(async (req, res) => ...)`.
+   */
+  originOf(expr: Node, depth = 0): Node {
+    if (depth > 12) return expr;
+    if (Node.isParenthesizedExpression(expr) || Node.isAsExpression(expr) || Node.isNonNullExpression(expr)) {
+      return this.originOf(expr.getExpression(), depth + 1);
+    }
+    if (Node.isIdentifier(expr)) {
+      const d = this.declarationOf(expr);
+      if (d && Node.isVariableDeclaration(d) && d.getInitializer() && !d.getParent()?.getParent()?.isKind(SyntaxKind.ForOfStatement)) {
+        return this.originOf(d.getInitializer()!, depth + 1);
+      }
+      if (d && Node.isBindingElement(d)) {
+        const owner = d.getParent()?.getParent();
+        if (owner && Node.isVariableDeclaration(owner) && owner.getInitializer()) {
+          const key = (d.getPropertyNameNode() ?? d.getNameNode()).getText();
+          const found = this.propertyOrigin(this.value(owner.getInitializer()!), key, depth);
+          if (found) return found;
+        }
+      }
+      if (d && (Node.isImportSpecifier(d) || Node.isImportClause(d))) {
+        const imp = d.getFirstAncestorByKindOrThrow(SyntaxKind.ImportDeclaration);
+        const file = this.resolveModule(imp.getModuleSpecifierValue(), d.getSourceFile());
+        const name = Node.isImportSpecifier(d) ? d.getName() : "default";
+        const found = file ? this.exportOrigin(file, name, depth) : undefined;
+        if (found) return found;
+      }
+      return expr;
+    }
+    if (Node.isPropertyAccessExpression(expr)) {
+      const found = this.propertyOrigin(this.value(expr.getExpression()), expr.getName(), depth);
+      if (found) return found;
+    }
+    return expr;
+  }
+
+  private propertyOrigin(base: Value, key: string, depth: number): Node | undefined {
+    if (base.kind === "object") {
+      for (const p of (base.node as any).getProperties() as Node[]) {
+        if (Node.isPropertyAssignment(p) && propName(p) === key) return this.originOf(p.getInitializerOrThrow(), depth + 1);
+        if (Node.isShorthandPropertyAssignment(p) && p.getName() === key) return this.originOf(p.getNameNode(), depth + 1);
+      }
+    }
+    if (base.kind === "module") return this.exportOrigin(base.file, key, depth);
+    return undefined;
+  }
+
+  private exportOrigin(file: SourceFile, name: string, depth: number): Node | undefined {
+    const ex = this.moduleExports(file);
+    const entry = ex.named.get(name);
+    if (entry?.node) {
+      const n = entry.node;
+      if (Node.isVariableDeclaration(n)) return n.getInitializer() ? this.originOf(n.getInitializer()!, depth + 1) : undefined;
+      return isDeclarationNode(n) ? n : this.originOf(n, depth + 1);
+    }
+    if (ex.equals) return this.propertyOrigin(this.value(ex.equals), name, depth);
+    return undefined;
   }
 
   /** `new Cls(...)` expressions for a class. */
@@ -442,7 +518,7 @@ export class Resolver {
       case "module":
         return this.moduleMember(base.file, name);
       case "external":
-        return name === "default" ? base : { kind: "external", pkg: base.pkg, path: [...base.path, name] };
+        return name === "default" ? base : { kind: "external", pkg: base.pkg, path: [...base.path, name], spec: base.spec };
       case "global":
         return { kind: "global", path: [...base.path, name] };
       case "object":
@@ -526,7 +602,7 @@ export class Resolver {
 
   moduleValue(spec: string, from: SourceFile, namespace = false): Value {
     const file = this.resolveModule(spec, from);
-    if (!file) return { kind: "external", pkg: packageName(spec), path: [] };
+    if (!file) return { kind: "external", pkg: packageName(spec), path: [], spec };
     if (!namespace) {
       const ex = this.moduleExports(file);
       if (ex.equals) return this.value(ex.equals);
@@ -696,6 +772,7 @@ function sameValue(a: Value, b: Value): boolean {
     case "collection": return a.decl === (b as typeof a).decl;
     case "class": return a.node === (b as typeof a).node;
     case "instance": return a.cls === (b as typeof a).cls;
+    case "result": return a.call === (b as typeof a).call;
     case "member": return a.handle === (b as typeof a).handle && a.path.join(".") === (b as typeof a).path.join(".");
     case "global": return a.path.join(".") === (b as typeof a).path.join(".");
     case "string": return a.value === (b as typeof a).value;
@@ -737,6 +814,10 @@ function findTopLevel(file: SourceFile, name: string): Node | undefined {
 function functionNameHint(fn: Node): string | undefined {
   if (Node.isFunctionDeclaration(fn) || Node.isMethodDeclaration(fn)) return fn.getName();
   const parent = fn.getParent();
+  if (parent && Node.isCallExpression(parent)) {
+    const holder = parent.getParent();
+    if (holder && Node.isVariableDeclaration(holder)) return holder.getName();
+  }
   if (parent && Node.isVariableDeclaration(parent)) return parent.getName();
   if (parent && Node.isPropertyAssignment(parent)) return parent.getName();
   return undefined;

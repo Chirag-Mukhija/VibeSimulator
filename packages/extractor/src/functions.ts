@@ -14,6 +14,11 @@ export function functionName(fn: FunctionLike): string | undefined {
   if (Node.isVariableDeclaration(parent) && parent.getInitializer() === self) return parent.getName();
   if (Node.isPropertyAssignment(parent) && parent.getInitializer() === self) return parent.getName().replace(/^["']|["']$/g, "");
   if (Node.isExportAssignment(parent)) return "default";
+  // const createUser = catchAsync(async (req, res) => ...): named after the variable.
+  if (Node.isCallExpression(parent) && parent.getArguments()[0] === self && !NOT_WRAPPERS.has(parent.getExpression().getText())) {
+    const holder = parent.getParent();
+    if (holder && Node.isVariableDeclaration(holder) && holder.getInitializer() === parent) return holder.getName();
+  }
   if (Node.isBinaryExpression(parent) && parent.getRight() === self) {
     const left = parent.getLeft().getText().replace(/\s/g, "");
     if (left === "module.exports") return "default";
@@ -22,6 +27,9 @@ export function functionName(fn: FunctionLike): string | undefined {
   }
   return undefined;
 }
+
+/** Calls that take a callback but return something else (a timer id, a promise). */
+const NOT_WRAPPERS = new Set(["setInterval", "setTimeout", "setImmediate", "requestAnimationFrame", "queueMicrotask", "Promise", "new Promise", "process.nextTick"]);
 
 /** "@<line>" for anonymous functions, so keys stay stable and unique per file. */
 export function functionKeyName(fn: FunctionLike): string {

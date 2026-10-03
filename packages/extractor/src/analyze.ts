@@ -22,7 +22,9 @@ type Owner = FunctionLike | SourceFile;
 
 type Step =
   | { kind: "op"; op: Op; site: CallSite }
-  | { kind: "call"; fn: FunctionLike; site: CallSite }
+  | { kind: "call"; fn: FunctionLike; site: CallSite; rpc?: boolean }
+  /** Calls a function received as a parameter; resolved per caller when expanded in a flow. */
+  | { kind: "param"; index: number; fns: FunctionLike[]; site: CallSite }
   | { kind: "dispatch"; fns: FunctionLike[]; site: CallSite }
   | { kind: "unresolved"; site: CallSite; reason: string };
 
@@ -43,7 +45,7 @@ interface EdgeOpts {
 }
 
 const FN_KIND_RANK: Record<string, number> = { service: 0, worker: 1, middleware: 2, handler: 2 };
-const RESOURCE_TYPES = new Set(["pg-pool", "pg-client", "mysql", "redis-client", "prisma", "mongoose-model"]);
+const RESOURCE_TYPES = new Set(["pg-pool", "pg-client", "mysql", "redis-client", "prisma", "mongoose-model", "drizzle"]);
 
 /** Analyzes a repository and returns a validated Trace Spec. */
 export function analyzeRepo(root: string, options: AnalyzeOptions = {}): TraceSpec {
@@ -249,13 +251,18 @@ class Analyzer {
       const calleeNode = site.call.getExpression();
       const v = this.r.value(calleeNode);
       const fns = functionsOf(v).filter((f) => this.isUserCode(f));
+      const paramIndex = isFunctionLike(owner) ? ownParamIndex(this.r, owner, calleeNode) : -1;
+      if (paramIndex >= 0) {
+        if (fns.length) out.push({ kind: "param", index: paramIndex, fns, site });
+        continue;
+      }
       if (fns.length === 1 && v.kind === "function") {
         // Only plumbing around a resource client is inlined (db.query -> pool.query);
         // named wrappers around libraries (hashPassword -> bcrypt) stay visible.
         const fw = forwardedCall(fns[0]!);
         const fwOp = fw && this.r.value(fw.getExpression()).kind === "member" ? classifyOp(this.r, fw, site.call.getArguments()) : undefined;
         if (fwOp && fw) out.push({ kind: "op", op: { ...fwOp, props: { ...fwOp.props, via: this.ev(fw) } }, site });
-        else out.push({ kind: "call", fn: fns[0]!, site });
+        else out.push({ kind: "call", fn: fns[0]!, site, rpc: this.isServerActionCall(owner, fns[0]!) });
       } else if (fns.length >= 1) {
         out.push({ kind: "dispatch", fns, site });
       } else if (v.kind === "unknown" && isDynamicCallee(this.r, calleeNode)) {
@@ -276,19 +283,19 @@ class Analyzer {
       seen.add(o);
       for (const s of this.stepsOf(o)) {
         if (s.kind === "call") discover(s.fn);
-        if (s.kind === "dispatch") s.fns.forEach(discover);
+        if (s.kind === "dispatch" || s.kind === "param") s.fns.forEach(discover);
       }
       order.push(o);
     };
     discover(owner);
     const local = new Map<Owner, boolean>();
     const get = (o: Owner) => this.sig.get(o) ?? local.get(o) ?? false;
-    for (const o of order) local.set(o, this.stepsOf(o).some((s) => s.kind !== "call"));
+    for (const o of order) local.set(o, this.stepsOf(o).some((s) => s.kind === "op" || s.kind === "unresolved" || s.kind === "dispatch"));
     for (let changed = true; changed; ) {
       changed = false;
       for (const o of order) {
         if (get(o)) continue;
-        if (this.stepsOf(o).some((s) => s.kind === "call" && get(s.fn))) {
+        if (this.stepsOf(o).some((s) => (s.kind === "call" && get(s.fn)) || (s.kind === "param" && s.fns.some(get)))) {
           local.set(o, true);
           changed = true;
         }
@@ -298,6 +305,12 @@ class Analyzer {
     return this.sig.get(owner) ?? false;
   }
 
+  /** A client component calling a "use server" function crosses the network. */
+  private isServerActionCall(owner: Owner, fn: FunctionLike): boolean {
+    const ownerFile = Node.isSourceFile(owner) ? owner : owner.getSourceFile();
+    return this.next && this.clientFiles.has(ownerFile) && isServerAction(fn);
+  }
+
   private isUserCode(fn: FunctionLike): boolean {
     const sf = fn.getSourceFile();
     return !sf.isDeclarationFile() && !sf.isInNodeModules();
@@ -305,7 +318,8 @@ class Analyzer {
 
   // ---------------------------------------------------------------- flows
 
-  private expand(flow: FlowState, owner: Owner, nodeId: string) {
+  /** `binding` is the call that entered `owner`, used to resolve callbacks passed as arguments. */
+  private expand(flow: FlowState, owner: Owner, nodeId: string, binding?: CallExpression | NewExpression) {
     if (flow.expanded.has(nodeId)) return;
     flow.expanded.add(nodeId);
     for (const step of this.stepsOf(owner)) {
@@ -315,8 +329,28 @@ class Analyzer {
       } else if (step.kind === "call") {
         if (!this.significant(step.fn)) continue;
         const callee = this.fnNode(step.fn, "service");
-        flow.push(this.inProcess(nodeId, callee, step.site.call, ctx));
-        this.expand(flow, step.fn, callee);
+        if (step.rpc) {
+          flow.push(this.addEdge(nodeId, callee, {
+            protocol: "http", lifecycle: "pooled", mode: "sync", at: step.site.call, label: "Server Action: the browser POSTs to the Next.js server",
+            props: { ...ctx, serverAction: true },
+          }));
+        } else {
+          flow.push(this.inProcess(nodeId, callee, step.site.call, ctx));
+        }
+        this.expand(flow, step.fn, callee, step.site.call);
+      } else if (step.kind === "param") {
+        const arg = binding?.getArguments()[step.index];
+        const bound = arg ? functionsOf(this.r.value(arg)).filter((f) => this.isUserCode(f)) : [];
+        const fns = (bound.length ? bound : step.fns).filter((f) => this.significant(f));
+        for (const fn of fns) {
+          const callee = this.fnNode(fn, "service");
+          const rpc = this.isServerActionCall(owner, fn);
+          const label = fns.length > 1 ? `one of ${fns.length} callbacks, chosen by the caller` : "calls the function it was given";
+          flow.push(rpc
+            ? this.addEdge(nodeId, callee, { protocol: "http", lifecycle: "pooled", mode: "sync", at: step.site.call, label: "Server Action: the browser POSTs to the Next.js server", props: { ...ctx, serverAction: true } })
+            : this.inProcess(nodeId, callee, step.site.call, { ...ctx, callback: true }, label));
+          this.expand(flow, fn, callee, step.site.call);
+        }
       } else if (step.kind === "dispatch") {
         for (const fn of step.fns) {
           const callee = this.fnNode(fn, "worker");
@@ -339,6 +373,12 @@ class Analyzer {
     const base = { protocol: op.protocol, lifecycle: op.lifecycle, mode: op.mode, label: op.label, at: site.call, props, role: op.role };
     if (t.type === "url") {
       const resolved = this.resolveUrl(t.method, t.url);
+      if (!resolved.route && t.envBase) {
+        // Base URL from an env var and no matching route here: an external service named after the variable.
+        const to = this.externalNode(t.envBase.toLowerCase().replace(/_/g, "-"), undefined, site.call, `External API (${t.envBase})`);
+        flow.push(this.addEdge(from, to, base));
+        return;
+      }
       if (resolved.route) {
         const to = this.routeNode(resolved.route);
         flow.push(this.addEdge(from, to, { ...base, label: `${t.method} ${resolved.route.path}` }));
@@ -402,6 +442,10 @@ class Analyzer {
 
   private elementNode(el: ChainElement, last: boolean, route: Route): string {
     if (el.kind === "fn" && el.fn) {
+      if (el.factoryCall) {
+        const factory = el.factoryCall.split("(")[0]!.trim();
+        return this.fnNode(el.fn, last ? "handler" : "middleware", `${factory}(…) middleware`, true);
+      }
       const label = last ? `${route.method} ${route.path} ${route.page ? "page (server render)" : "handler"}` : "middleware";
       return this.fnNode(el.fn, last ? "handler" : "middleware", label, route.framework === "next");
     }
@@ -412,7 +456,9 @@ class Analyzer {
   /** Resources a library middleware uses internally, e.g. a Redis store for rate limits. */
   private libraryEdges(flow: FlowState, h: Handle, mwId: string) {
     const created = h.created;
+    if (h.data.name === "passport.session") this.passportSessionEdges(flow, mwId);
     if (!Node.isCallExpression(created)) return;
+    if (h.data.name === "express-session") this.sessionStoreEdge(flow, created, mwId);
     for (const arg of created.getArguments()) {
       arg.forEachDescendant((n) => {
         if (!Node.isIdentifier(n)) return;
@@ -428,6 +474,47 @@ class Analyzer {
         }));
       });
     }
+  }
+
+  /** express-session with a store: every request reads (and may write) the session there. */
+  private sessionStoreEdge(flow: FlowState, call: CallExpression, mwId: string) {
+    const opts = this.r.value(call.getArguments()[0]);
+    if (opts.kind !== "object") return;
+    const prop = (opts.node as any).getProperties().find((p: Node) => Node.isPropertyAssignment(p) && p.getName() === "store") as Node | undefined;
+    const init = prop && Node.isPropertyAssignment(prop) ? prop.getInitializer() : undefined;
+    if (!init) return;
+    const origin = this.r.originOf(init);
+    const root = Node.isCallExpression(origin) || Node.isNewExpression(origin) ? rootIdentifier(origin.getExpression()) : undefined;
+    const pkg = root ? pick(this.r.value(root), "external")?.pkg : undefined;
+    const engine = pkg ? SESSION_STORES[pkg] : undefined;
+    if (!engine) return;
+    const to = this.resourceForEngine(engine, init);
+    const isRedis = engine === "redis";
+    flow.push(this.addEdge(mwId, to, {
+      protocol: isRedis ? "redis" : engine === "mongodb" ? "mongodb" : "sql", lifecycle: isRedis ? "persistent" : "pooled", mode: "sync", at: init,
+      label: `load the session from ${engineLabel(engine)} on every request`, props: { sessionStore: pkg },
+    }));
+  }
+
+  /** passport.session() runs the deserializeUser callback for every request with a session. */
+  private passportSessionEdges(flow: FlowState, mwId: string) {
+    for (const call of this.r.calls()) {
+      if (!Node.isCallExpression(call)) continue;
+      const callee = this.r.value(call.getExpression());
+      if (callee.kind !== "external" || callee.pkg !== "passport" || callee.path.join(".") !== "deserializeUser") continue;
+      const fn = pick(this.r.value(call.getArguments()[0]), "function")?.node;
+      if (!fn) continue;
+      const handler = this.fnNode(fn, "middleware", "passport deserializeUser");
+      flow.push(this.inProcess(mwId, handler, call, {}, "passport loads the user for this session"));
+      this.expand(flow, fn, handler);
+    }
+  }
+
+  /** The resource node for an engine, creating one when no client handle was found. */
+  private resourceForEngine(engine: string, at: Node): string {
+    for (const [h, id] of this.resourceIds) if ((h.type === "prisma" ? prismaProvider(this.repo.root) : engineOf(h)) === engine) return id;
+    const id = engine === "redis" ? "cache:redis" : `db:${engine}`;
+    return this.addNode({ id, kind: engine === "redis" ? "cache" : "database", label: engineLabel(engine), evidence: [this.ev(at)], props: { engine } });
   }
 
   private targetNode(t: Target, at: Node): string | undefined {
@@ -457,9 +544,9 @@ class Analyzer {
     }
   }
 
-  private externalNode(service: string, host: string | undefined, at: Node): string {
+  private externalNode(service: string, host: string | undefined, at: Node, label?: string): string {
     const slug = service.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-    return this.addNode({ id: `ext:${slug}`, kind: "external-api", label: service, evidence: [this.ev(at)], props: { host: host ?? null } });
+    return this.addNode({ id: `ext:${slug}`, kind: "external-api", label: label ?? service, evidence: [this.ev(at)], props: { host: host ?? null } });
   }
 
   private resolveUrl(method: string, url: string): { route?: Route; external?: string } {
@@ -854,6 +941,25 @@ function isDynamicCallee(r: Resolver, callee: Node): boolean {
   return false;
 }
 
+/** Index of `owner`'s own parameter that `callee` names, or -1. */
+function ownParamIndex(r: Resolver, owner: FunctionLike, callee: Node): number {
+  if (!Node.isIdentifier(callee)) return -1;
+  const d = r.declarationOf(callee);
+  if (!d || !Node.isParameterDeclaration(d) || d.getParent() !== owner) return -1;
+  return owner.getParameters().indexOf(d);
+}
+
+function hasUseServer(statements: Node[]): boolean {
+  const first = statements[0];
+  return !!first && Node.isExpressionStatement(first) && /^["']use server["']$/.test(first.getExpression().getText());
+}
+
+function isServerAction(fn: FunctionLike): boolean {
+  if (hasUseServer(fn.getSourceFile().getStatements())) return true;
+  const body = fn.getBody();
+  return !!body && Node.isBlock(body) && hasUseServer(body.getStatements());
+}
+
 function siteProps(site: CallSite): Record<string, unknown> {
   const p: Record<string, unknown> = {};
   if (site.inLoop) p.inLoop = true;
@@ -876,9 +982,25 @@ function engineOf(h: Handle): string {
       return "redis";
     case "prisma":
       return "prisma";
+    case "drizzle":
+      return String(h.data.engine ?? "postgres");
     default:
       return h.lib;
   }
+}
+
+const SESSION_STORES: Record<string, string> = {
+  "connect-mongo": "mongodb",
+  "connect-mongodb-session": "mongodb",
+  "connect-redis": "redis",
+  "connect-pg-simple": "postgres",
+  "express-mysql-session": "mysql",
+};
+
+function rootIdentifier(expr: Node): Node | undefined {
+  let cur: Node = expr;
+  while (Node.isPropertyAccessExpression(cur)) cur = cur.getExpression();
+  return Node.isIdentifier(cur) ? cur : undefined;
 }
 
 function prismaProvider(root: string): string {

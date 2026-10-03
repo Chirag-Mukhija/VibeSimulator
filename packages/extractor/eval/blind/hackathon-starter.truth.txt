@@ -1,0 +1,47 @@
+# BLIND sample #2: labeled from the source before the extractor was ever run on this repo.
+# Includes library semantics a perfect extractor would know: express-session with a
+# MongoStore reads the session from MongoDB, and passport.session() runs the registered
+# deserializeUser callback (a User.findById) on every request.
+repo https://github.com/sahat/hackathon-starter d390f81
+
+scope POST /signup
+scope POST /account/password
+scope GET /api/nyt
+scope POST /api/stripe
+
+let APP = fn:config/morgan.js#@123 @ app.js:135 > mw:compression@app.js:136 @ app.js:136 > mw:express.json@app.js:137 @ app.js:137 > mw:express.urlencoded@app.js:138 @ app.js:138 > mw:express-rate-limit@app.js:47 @ app.js:139 > mw:express-session@app.js:141 @ app.js:140 > mw:passport.initialize@app.js:153 @ app.js:153 > mw:passport.session@app.js:154 @ app.js:154 > fn:config/flash.js#flash @ app.js:155 > fn:app.js#@156 @ app.js:156 > mw:lusca.xframe@app.js:166 @ app.js:166 > mw:lusca.xssProtection@app.js:167 @ app.js:167 > fn:app.js#@169 @ app.js:169 > fn:app.js#@175 @ app.js:175 > mw:express.static@app.js:211 @ app.js:211
+let DB = db:mongodb
+let U = fn:controllers/user.js
+let MAIL = fn:config/nodemailer.js#sendMail
+
+# session store and per-request user lookup
+edge mw:express-session@app.js:141 -> $DB @ app.js:150
+edge mw:passport.session@app.js:154 -> fn:config/passport.js#@21 @ config/passport.js:21
+edge fn:config/passport.js#@21 -> $DB @ config/passport.js:23
+
+route POST /signup @ app.js:269
+chain POST /signup = $APP > $U#postSignup @ app.js:269
+edge $U#postSignup -> $DB @ controllers/user.js:264
+edge $U#postSignup -> $U#sendPasswordlessLoginLinkIfUserExists @ controllers/user.js:268
+edge $U#postSignup -> $DB @ controllers/user.js:279
+edge $U#postSignup -> $U#sendPasswordlessSignupLink @ controllers/user.js:282
+edge $U#sendPasswordlessLoginLinkIfUserExists -> $DB @ controllers/user.js:171
+edge $U#sendPasswordlessLoginLinkIfUserExists -> $MAIL @ controllers/user.js:188
+edge $U#sendPasswordlessSignupLink -> $DB @ controllers/user.js:207
+edge $U#sendPasswordlessSignupLink -> $MAIL @ controllers/user.js:229
+# a new SMTP transport per email; the retry in .catch is the error path
+edge $MAIL -> ext:smtp-server @ config/nodemailer.js:19
+edge $MAIL -> ext:smtp-server @ config/nodemailer.js:30
+
+route POST /account/password @ app.js:276
+chain POST /account/password = $APP > fn:config/passport.js#isAuthenticated @ app.js:276 > $U#postUpdatePassword @ app.js:276
+edge $U#postUpdatePassword -> $DB @ controllers/user.js:384
+edge $U#postUpdatePassword -> $DB @ controllers/user.js:386
+
+route GET /api/nyt @ app.js:295
+chain GET /api/nyt = $APP > fn:controllers/api.js#getNewYorkTimes @ app.js:295
+edge fn:controllers/api.js#getNewYorkTimes -> ext:api-nytimes-com @ controllers/api.js:271
+
+route POST /api/stripe @ app.js:298
+chain POST /api/stripe = $APP > fn:controllers/api.js#postStripe @ app.js:298
+edge fn:controllers/api.js#postStripe -> ext:stripe-api @ controllers/api.js:487

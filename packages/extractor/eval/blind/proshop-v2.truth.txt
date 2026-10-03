@@ -1,0 +1,45 @@
+# BLIND sample: labeled from the source before the extractor was ever run on this repo.
+# Only the flows listed under `scope` are scored.
+repo https://github.com/bradtraversy/proshop-v2 e23e3a8
+
+scope POST /api/users/auth
+scope POST /api/orders
+scope PUT /api/orders/:id/pay
+scope GET /api/orders/mine
+
+let APP = mw:express.json@backend/server.js:19 @ backend/server.js:19 > mw:express.urlencoded@backend/server.js:20 @ backend/server.js:20 > mw:cookie-parser@backend/server.js:21 @ backend/server.js:21
+let PROTECT = fn:backend/middleware/authMiddleware.js#protect
+let USERS = fn:backend/controllers/userController.js
+let ORDERS = fn:backend/controllers/orderController.js
+let PAYPAL = fn:backend/utils/paypal.js
+let DB = db:mongodb
+
+route POST /api/users/auth @ backend/routes/userRoutes.js:18
+chain POST /api/users/auth = $APP > $USERS#authUser @ backend/routes/userRoutes.js:18
+edge $USERS#authUser -> $DB @ backend/controllers/userController.js:11
+# user.matchPassword is a schema method (userSchema.methods.matchPassword) that runs bcryptjs
+edge $USERS#authUser -> fn:backend/models/userModel.js#@31 @ backend/controllers/userController.js:13
+edge fn:backend/models/userModel.js#@31 -> compute:bcryptjs @ backend/models/userModel.js:32
+
+route POST /api/orders @ backend/routes/orderRoutes.js:13
+chain POST /api/orders = $APP > $PROTECT @ backend/routes/orderRoutes.js:13 > $ORDERS#addOrderItems @ backend/routes/orderRoutes.js:13
+edge $PROTECT -> $DB @ backend/middleware/authMiddleware.js:16
+edge $ORDERS#addOrderItems -> $DB @ backend/controllers/orderController.js:23
+# order = new Order({...}); order.save() writes the document
+edge $ORDERS#addOrderItems -> $DB @ backend/controllers/orderController.js:55
+
+route PUT /api/orders/:id/pay @ backend/routes/orderRoutes.js:16
+chain PUT /api/orders/:id/pay = $APP > $PROTECT @ backend/routes/orderRoutes.js:16 > $ORDERS#updateOrderToPaid @ backend/routes/orderRoutes.js:16
+edge $ORDERS#updateOrderToPaid -> $PAYPAL#verifyPayPalPayment @ backend/controllers/orderController.js:92
+edge $PAYPAL#verifyPayPalPayment -> $PAYPAL#getPayPalAccessToken @ backend/utils/paypal.js:74
+# base URL comes from the PAYPAL_API_URL env var: an external API named after the variable
+edge $PAYPAL#getPayPalAccessToken -> ext:paypal-api-url @ backend/utils/paypal.js:28
+edge $PAYPAL#verifyPayPalPayment -> ext:paypal-api-url @ backend/utils/paypal.js:75
+edge $ORDERS#updateOrderToPaid -> $PAYPAL#checkIfNewTransaction @ backend/controllers/orderController.js:96
+edge $PAYPAL#checkIfNewTransaction -> $DB @ backend/utils/paypal.js:53
+edge $ORDERS#updateOrderToPaid -> $DB @ backend/controllers/orderController.js:99
+edge $ORDERS#updateOrderToPaid -> $DB @ backend/controllers/orderController.js:115
+
+route GET /api/orders/mine @ backend/routes/orderRoutes.js:14
+chain GET /api/orders/mine = $APP > $PROTECT @ backend/routes/orderRoutes.js:14 > $ORDERS#getMyOrders @ backend/routes/orderRoutes.js:14
+edge $ORDERS#getMyOrders -> $DB @ backend/controllers/orderController.js:65

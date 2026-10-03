@@ -1,7 +1,7 @@
 import { Node, type CallExpression } from "ts-morph";
-import { HTTP_METHODS, stringValue } from "./libraries.ts";
+import { HTTP_METHODS, stringValue, libraryMiddleware } from "./libraries.ts";
 import { isErrorHandler, functionName } from "./functions.ts";
-import { isFunctionLike, pick, type FunctionLike, type Handle, type Resolver } from "./values.ts";
+import { isFunctionLike, pick, ITERATION_METHODS, calleeMethodName, type FunctionLike, type Handle, type Resolver, type Value } from "./values.ts";
 import { joinUrlPath } from "./util.ts";
 
 export interface ChainElement {
@@ -13,6 +13,8 @@ export interface ChainElement {
   /** The `use`/route call (or Next.js handler declaration) that put this element in the chain. */
   registeredAt: Node;
   wrappedBy?: string;
+  /** `auth('manageUsers')`: middleware built by a factory call; shown with its call text. */
+  factoryCall?: string;
 }
 
 export interface Route {
@@ -32,6 +34,8 @@ interface Registration {
   method: string; // "use" or an HTTP method
   path?: string;
   args: Node[];
+  /** Per-argument values when the call runs once per element of an array (routes.forEach(...)). */
+  values?: Value[];
 }
 
 /** Routes of every Express app, with the full middleware chain each one runs. */
@@ -60,7 +64,9 @@ export function extractExpressRoutes(r: Resolver): Route[] {
     const handle = pick(r.value(recvNode), "handle")?.handle;
     if (!handle || (handle.type !== "express-app" && handle.type !== "express-router")) continue;
     const list = regs.get(handle) ?? [];
-    list.push({ call, method, path: routePath, args: call.getArguments() });
+    const perElement = iterationBindings(r, call);
+    if (perElement) for (const values of perElement) list.push({ call, method, path: routePath, args: call.getArguments(), values });
+    else list.push({ call, method, path: routePath, args: call.getArguments() });
     regs.set(handle, list);
   }
   for (const list of regs.values()) {
@@ -92,37 +98,40 @@ function walk(
   visiting.add(handle);
   const stack = [...inherited];
   for (const reg of regs.get(handle) ?? []) {
-    let args = flatten(reg.args);
+    let args = reg.values ? reg.args : flatten(reg.args);
+    const valueAt = (i: number) => reg.values?.[i] ?? r.value(args[i]);
+    let offset = 0;
     if (reg.method === "use") {
       let mount = "/";
-      const first = args[0] ? r.value(args[0]) : undefined;
+      const first = args[0] ? valueAt(0) : undefined;
       if (first && first.kind === "string") {
         mount = first.value;
-        args = args.slice(1);
+        offset = 1;
       }
       const at = joinUrlPath(prefix, mount);
-      for (const arg of args) {
-        const sub = pick(r.value(arg), "handle")?.handle;
+      for (let i = offset; i < args.length; i++) {
+        const v = valueAt(i);
+        const sub = pick(v, "handle")?.handle;
         if (sub && (sub.type === "express-router" || sub.type === "express-app") && regs.has(sub)) {
           walk(r, regs, app, sub, at, stack, out, visiting);
           continue;
         }
-        const el = element(r, arg, reg.call);
+        const el = element(r, args[i]!, reg.call, reg.values ? v : undefined);
         if (el) stack.push({ element: el, prefix: at });
       }
       continue;
     }
     let routePath = reg.path;
     if (routePath === undefined) {
-      const first = args[0] ? r.value(args[0]) : undefined;
+      const first = args[0] ? valueAt(0) : undefined;
       if (!first || first.kind !== "string") continue;
       routePath = first.value;
-      args = args.slice(1);
+      offset = 1;
     }
     const full = joinUrlPath(prefix, routePath);
     const chain: ChainElement[] = stack.filter((s) => matches(s.prefix, full)).map((s) => s.element);
-    for (const arg of args) {
-      const el = element(r, arg, reg.call);
+    for (let i = offset; i < args.length; i++) {
+      const el = element(r, args[i]!, reg.call, reg.values ? valueAt(i) : undefined);
       if (el) chain.push(el);
     }
     const methods = reg.method === "all" ? ["ALL"] : [reg.method.toUpperCase()];
@@ -140,17 +149,30 @@ function flatten(args: Node[]): Node[] {
 }
 
 /** One chain element; error handlers (4 params) are left out of the request path. */
-function element(r: Resolver, arg: Node, registeredAt: CallExpression): ChainElement | undefined {
-  // asyncHandler(controller.fn): a user wrapper that returns a function.
-  if (Node.isCallExpression(arg)) {
-    const wrapper = pick(r.value(arg.getExpression()), "function");
-    const inner = arg.getArguments()[0];
-    if (wrapper && inner && pick(r.returnValue(wrapper.node), "function")) {
-      const fn = pick(r.value(inner), "function");
-      if (fn) return { kind: "fn", fn: fn.node, node: arg, registeredAt, wrappedBy: functionName(wrapper.node) };
+function element(r: Resolver, arg: Node, registeredAt: CallExpression, bound?: Value): ChainElement | undefined {
+  if (!bound) {
+    const origin = r.originOf(arg);
+    if (Node.isCallExpression(origin)) {
+      const calleeValue = r.value(origin.getExpression());
+      const wrapper = pick(calleeValue, "function");
+      const inner = origin.getArguments()[0];
+      const innerFn = inner ? pick(r.value(inner), "function") : undefined;
+      // asyncHandler(controller.fn) / catchAsync(async (req, res) => ...): unwrap to the real handler.
+      if (wrapper && innerFn && pick(r.returnValue(wrapper.node), "function")) {
+        return { kind: "fn", fn: innerFn.node, node: arg, registeredAt, wrappedBy: functionName(wrapper.node) };
+      }
+      // auth('manageUsers'), validate(schema): a user factory that returns the middleware.
+      const produced = wrapper ? pick(r.returnValue(wrapper.node), "function") : undefined;
+      if (produced && !innerFn) {
+        if (isErrorHandler(produced.node)) return undefined;
+        return { kind: "fn", fn: produced.node, node: arg, registeredAt, factoryCall: origin.getText().replace(/\s+/g, " ").slice(0, 60) };
+      }
+      if (calleeValue.kind === "external" && innerFn) {
+        return { kind: "fn", fn: innerFn.node, node: arg, registeredAt, wrappedBy: [calleeValue.pkg, ...calleeValue.path].join(".") };
+      }
     }
   }
-  const v = r.value(arg);
+  const v = bound ?? r.value(arg);
   const fn = pick(v, "function");
   if (fn && isFunctionLike(fn.node)) {
     if (isErrorHandler(fn.node)) return undefined;
@@ -159,5 +181,38 @@ function element(r: Resolver, arg: Node, registeredAt: CallExpression): ChainEle
   const handle = pick(v, "handle")?.handle;
   if (handle?.type === "express-middleware") return { kind: "lib", handle, node: arg, registeredAt };
   if (handle) return undefined;
+  const result = pick(v, "result");
+  if (result) return { kind: "lib", handle: libraryMiddleware(r, result.call, result.pkg, result.path), node: arg, registeredAt };
+  const ext = pick(v, "external");
+  if (ext) return { kind: "lib", handle: libraryMiddleware(r, arg, ext.pkg, ext.path), node: arg, registeredAt };
+  if (v.kind === "string") return undefined;
   return { kind: "unknown", node: arg, registeredAt };
+}
+
+/**
+ * `routes.forEach((route) => router.use(route.path, route.route))`: one set of
+ * argument values per array element, so paths and routers stay paired.
+ */
+function iterationBindings(r: Resolver, call: CallExpression): Value[][] | undefined {
+  const fn = call.getFirstAncestor((a) => isFunctionLike(a));
+  if (!fn || !isFunctionLike(fn)) return undefined;
+  const iter = fn.getParent();
+  if (!iter || !Node.isCallExpression(iter) || !iter.getArguments().includes(fn as any)) return undefined;
+  const method = calleeMethodName(iter);
+  if (!method || !ITERATION_METHODS.has(method)) return undefined;
+  const param = fn.getParameters()[0];
+  if (!param || !Node.isParameterDeclaration(param)) return undefined;
+  const pname = param.getName();
+  const recv = (iter.getExpression() as any).getExpression?.() as Node | undefined;
+  if (!recv) return undefined;
+  const arr = r.originOf(recv);
+  if (!Node.isArrayLiteralExpression(arr)) return undefined;
+  const args = call.getArguments();
+  if (!args.some((a) => Node.isPropertyAccessExpression(a) && a.getExpression().getText() === pname)) return undefined;
+  return arr.getElements().map((el) => {
+    const obj = r.value(el);
+    return args.map((a) =>
+      Node.isPropertyAccessExpression(a) && a.getExpression().getText() === pname ? r.member(obj, a.getName()) : r.value(a),
+    );
+  });
 }

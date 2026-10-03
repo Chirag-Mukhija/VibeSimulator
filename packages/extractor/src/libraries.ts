@@ -15,7 +15,7 @@ export type Target =
   | { type: "compute"; name: string; pool: "libuv-threadpool" | "event-loop" }
   | { type: "ws"; server?: Handle; url?: string }
   | { type: "sse"; url: string }
-  | { type: "url"; method: string; url: string; template: boolean };
+  | { type: "url"; method: string; url: string; template: boolean; envBase?: string };
 
 export interface Op {
   target: Target;
@@ -94,11 +94,17 @@ const CREATORS: Creator[] = [
   { pkg: "socket.io", path: "", type: "sio-server" },
   { pkg: "@aws-sdk/client-s3", path: "S3Client", type: "s3-client", isNew: true },
   { pkg: "@prisma/client", path: "PrismaClient", type: "prisma", isNew: true },
-  { pkg: "mongoose", path: "model", type: "mongoose-model", data: (r, call) => ({ model: stringArg(r, call, 0) }) },
+  { pkg: "mongoose", path: "model", type: "mongoose-model", data: (r, call) => ({ model: stringArg(r, call, 0), schema: call.getArguments()[1] }) },
   { pkg: "bullmq", path: "Queue", type: "bull-queue", isNew: true, data: (r, call) => ({ name: stringArg(r, call, 0) ?? "queue" }) },
   { pkg: "bull", path: "", type: "bull-queue", data: (r, call) => ({ name: stringArg(r, call, 0) ?? "queue" }) },
   { pkg: "axios", path: "create", type: "http-client", data: (r, call) => ({ baseURL: stringOption(r, call, "baseURL") ?? "" }) },
   { pkg: "@supabase/supabase-js", path: "createClient", type: "supabase" },
+  { pkg: "drizzle-orm", path: "drizzle", type: "drizzle" },
+  { pkg: "@supabase/ssr", path: "createServerClient", type: "supabase" },
+  { pkg: "@supabase/ssr", path: "createBrowserClient", type: "supabase" },
+  ...["createRouteHandlerClient", "createServerComponentClient", "createClientComponentClient", "createServerActionClient", "createMiddlewareClient"].map((p) => ({
+    pkg: "@supabase/auth-helpers-nextjs", path: p, type: "supabase" as const,
+  })),
   ...Object.entries(SDKS).flatMap(([pkg, s]) =>
     s.paths.map((p) => ({ pkg, path: p, type: "sdk-client" as const, data: () => ({ service: s.service, host: s.host, protocol: s.protocol ?? "http" }) })),
   ),
@@ -115,6 +121,10 @@ function findCreator(callee: Value, isNew: boolean): Creator | undefined {
 
 export const hooks: LibraryHooks = {
   create(r, call, callee, isNew) {
+    // new Order({...}): an unsaved Mongoose document.
+    if (isNew && callee.kind === "handle" && callee.handle.type === "mongoose-model") {
+      return r.handle(key(call), () => mk("mongoose-doc", "mongoose", call, { model: callee.handle }, callee.handle.root));
+    }
     if (callee.kind === "global" && isNew) {
       const name = callee.path.join(".");
       if (name === "WebSocket") {
@@ -127,11 +137,27 @@ export const hooks: LibraryHooks = {
     }
     const creator = findCreator(callee, isNew);
     if (!creator) return undefined;
+    if (creator.type === "drizzle") {
+      // drizzle(pool): queries run on the client it was given.
+      const client = pick(r.value(call.getArguments()[0]), "handle")?.handle;
+      const spec = (callee as { spec?: string }).spec ?? "";
+      const engine = /mysql/.test(spec) ? "mysql" : /sqlite|libsql|d1|expo/.test(spec) ? "sqlite" : "postgres";
+      return r.handle(key(call), () => mk("drizzle", "drizzle-orm", call, { engine, client }, client?.root));
+    }
     return r.handle(key(call), () => mk(creator.type, (callee as { pkg: string }).pkg, call, creator.data?.(r, call) ?? {}));
   },
 
   callMember(r, handle, path, call) {
     const method = path[path.length - 1];
+    // Order.findById(id) -> a document (or query); .select()/.populate() keep it.
+    if (handle.type === "mongoose-model" && path.length === 1 && MONGOOSE_QUERIES.has(method ?? "")) {
+      return { kind: "handle", handle: r.handle(`${key(handle.created)}#doc`, () => mk("mongoose-doc", "mongoose", handle.created, { model: handle }, handle.root)) };
+    }
+    if (handle.type === "mongoose-doc" && path.length === 1 && MONGOOSE_CHAIN.has(method ?? "")) return { kind: "handle", handle };
+    // Router().use(a).use(b), app.get(...).post(...): Express methods return the same app/router.
+    if ((handle.type === "express-app" || handle.type === "express-router") && path.length === 1 && (method === "use" || HTTP_METHODS.has(method ?? ""))) {
+      return { kind: "handle", handle };
+    }
     // io.to(room).emit(...): broadcast operators return the same server.
     if ((handle.type === "sio-server" || handle.type === "sio-socket") && ["to", "in", "of", "except", "volatile", "compress", "timeout", "broadcast"].includes(method ?? "")) {
       return { kind: "handle", handle };
@@ -147,6 +173,12 @@ export const hooks: LibraryHooks = {
   },
 
   member(r, handle, path) {
+    // userSchema.methods.matchPassword / userSchema.statics.findByEmail: user code, not a query.
+    if ((handle.type === "mongoose-doc" || handle.type === "mongoose-model") && path.length === 1) {
+      const model = handle.type === "mongoose-doc" ? (handle.data.model as Handle) : handle;
+      const fn = schemaFunction(r, model, handle.type === "mongoose-doc" ? "methods" : "statics", path[0]!);
+      if (fn) return fn;
+    }
     if (handle.type === "ws-server" && path[0] === "clients" && path[1] === "[element]") {
       return { kind: "handle", handle: socketOf(r, handle) };
     }
@@ -171,6 +203,45 @@ export const hooks: LibraryHooks = {
 };
 
 export const HTTP_METHODS = new Set(["get", "post", "put", "patch", "delete", "all", "options", "head"]);
+
+const MONGOOSE_QUERIES = new Set([
+  "find", "findOne", "findById", "create", "findOneAndUpdate", "findByIdAndUpdate", "findOneAndDelete", "findByIdAndDelete",
+  "insertMany", "aggregate", "where",
+]);
+const MONGOOSE_CHAIN = new Set(["select", "populate", "lean", "sort", "limit", "skip", "exec", "where", "equals", "in", "gt", "lt"]);
+const MONGOOSE_DOC_WRITES = new Set(["save", "deleteOne", "updateOne", "remove"]);
+
+/** schema.methods.X = fn / schema.statics.X = fn for the schema a model was built from. */
+function schemaFunction(r: Resolver, model: Handle, kind: "methods" | "statics", name: string): Value | undefined {
+  const schemaNode = model.data.schema as Node | undefined;
+  if (!schemaNode) return undefined;
+  const schemaDecl = Node.isIdentifier(schemaNode) ? r.declarationOf(schemaNode) : undefined;
+  if (!schemaDecl) return undefined;
+  for (const file of r.repo.files) {
+    let found: Value | undefined;
+    file.forEachDescendant((n, t) => {
+      if (found) return;
+      if (!Node.isBinaryExpression(n) || n.getOperatorToken().getText() !== "=") return;
+      const left = n.getLeft();
+      if (!Node.isPropertyAccessExpression(left) || left.getName() !== name) return;
+      const mid = left.getExpression();
+      if (!Node.isPropertyAccessExpression(mid) || mid.getName() !== kind) return;
+      const base = mid.getExpression();
+      if (Node.isIdentifier(base) && r.declarationOf(base) === schemaDecl) {
+        found = r.value(n.getRight());
+        t.stop();
+      }
+    });
+    if (found && found.kind === "function") return found;
+  }
+  return undefined;
+}
+
+/** A middleware produced by a package we have no model for, e.g. express-jwt's `jwt({...})`. */
+export function libraryMiddleware(r: Resolver, call: Node, pkg: string, path: string[]): Handle {
+  const name = [pkg, ...path.filter((p) => p !== "default")].join(".");
+  return r.handle(key(call), () => mk("express-middleware", pkg, call, { name }));
+}
 
 function socketOf(r: Resolver, server: Handle): Handle {
   const type: HandleType = server.type === "sio-server" ? "sio-socket" : "ws-socket";
@@ -321,6 +392,26 @@ export function classifyOp(r: Resolver, call: CallExpression | NewExpression, la
     case "mongoose-model":
       if (path.length === 1) return dbOp(h, "pooled", `${method} ${String(h.data.model ?? "")}`.trim(), "mongodb");
       return undefined;
+    case "drizzle": {
+      const verb = path[0]!;
+      const lc: Lifecycle = "pooled";
+      if (path.length === 1 && (verb === "select" || verb === "selectDistinct")) {
+        const from = chainCall(call, "from");
+        return dbOp(h, lc, `select ${from?.getArguments()[0]?.getText() ?? ""}`.trim());
+      }
+      if (path.length === 1 && (verb === "insert" || verb === "update" || verb === "delete")) {
+        return dbOp(h, lc, `${verb} ${call.getArguments()[0]?.getText() ?? ""}`.trim());
+      }
+      if (path.length === 3 && verb === "query") return dbOp(h, lc, `${path[2]} ${path[1]}`);
+      if (path.length === 1 && (verb === "execute" || verb === "transaction")) return dbOp(h, lc, verb);
+      return undefined;
+    }
+    case "mongoose-doc":
+      if (path.length === 1 && MONGOOSE_DOC_WRITES.has(method)) {
+        const model = (h.data.model as Handle | undefined)?.data.model;
+        return dbOp(h, "pooled", `${method} ${String(model ?? "document")}`.trim(), "mongodb");
+      }
+      return undefined;
     case "bull-queue":
       if (method === "add" || method === "addBulk") {
         const name = String(h.data.name ?? "queue");
@@ -380,11 +471,49 @@ function urlOp(r: Resolver, _call: Node, args: Node[], method: string, base = ""
   const v = r.value(args[0]);
   const s = pick(v, "string");
   const url = base + (s?.value ?? "{}");
+  const env = args[0] ? leadingEnvVar(r, args[0]) : undefined;
   return {
-    target: { type: "url", method, url, template: !s || s.template || !!base && false },
-    protocol: "http", lifecycle: "pooled", mode: "sync", label: `${method} ${url}`,
+    target: { type: "url", method, url, template: !s || s.template, ...(env ? { envBase: env } : {}) },
+    protocol: "http", lifecycle: "pooled", mode: "sync", label: `${method} ${env ? url.replace(/^\{\}/, `\${${env}}`) : url}`,
     props: { timeout: hasTimeout(r, args) },
   };
+}
+
+/** `${PAYPAL_API_URL}/v1/...` -> "PAYPAL_API_URL" when the URL starts with an environment variable. */
+function leadingEnvVar(r: Resolver, arg: Node): string | undefined {
+  const origin = r.originOf(arg);
+  let first: Node | undefined;
+  if (Node.isTemplateExpression(origin) && origin.getHead().getLiteralText() === "") first = origin.getTemplateSpans()[0]?.getExpression();
+  else if (Node.isBinaryExpression(origin) && origin.getOperatorToken().getText() === "+") first = origin.getLeft();
+  if (!first) return undefined;
+  return envVarName(r, first, 0);
+}
+
+function envVarName(r: Resolver, node: Node, depth: number): string | undefined {
+  if (depth > 6) return undefined;
+  const text = node.getText().replace(/\s/g, "");
+  const direct = /^process\.env\.(\w+)$|^process\.env\[["'](\w+)["']\]$|^import\.meta\.env\.(\w+)$/.exec(text);
+  if (direct) return direct[1] ?? direct[2] ?? direct[3];
+  if (Node.isIdentifier(node)) {
+    const d = r.declarationOf(node);
+    if (d && Node.isBindingElement(d)) {
+      const owner = d.getParent()?.getParent();
+      if (owner && Node.isVariableDeclaration(owner) && /^(process\.env|import\.meta\.env)$/.test(owner.getInitializer()?.getText() ?? "")) {
+        return (d.getPropertyNameNode() ?? d.getNameNode()).getText();
+      }
+    }
+    if (d && Node.isVariableDeclaration(d) && d.getInitializer()) {
+      const init = d.getInitializer()!;
+      const inner = Node.isBinaryExpression(init) ? init.getLeft() : init;
+      return envVarName(r, inner, depth + 1);
+    }
+  }
+  if (Node.isPropertyAccessExpression(node)) {
+    // config.apiUrl where config = { apiUrl: process.env.API_URL }
+    const origin = r.originOf(node);
+    if (origin !== node) return envVarName(r, Node.isBinaryExpression(origin) ? origin.getLeft() : origin, depth + 1);
+  }
+  return undefined;
 }
 
 function fetchMethod(r: Resolver, opts: Node | undefined): string {
@@ -473,6 +602,19 @@ export function numericValue(r: Resolver, node: Node): number | undefined {
 
 function insideFunction(node: Node): boolean {
   return node.getAncestors().some((a) => isFunctionLike(a));
+}
+
+/** The call to `name` later in a fluent chain: db.select().from(users) -> the `.from(users)` call. */
+function chainCall(call: CallExpression | NewExpression, name: string): CallExpression | undefined {
+  let cur: Node = call;
+  for (;;) {
+    const parent = cur.getParent();
+    if (!parent || !Node.isPropertyAccessExpression(parent) || parent.getExpression() !== cur) return undefined;
+    const grand = parent.getParent();
+    if (!grand || !Node.isCallExpression(grand) || grand.getExpression() !== parent) return undefined;
+    if (parent.getName() === name) return grand;
+    cur = grand;
+  }
 }
 
 /** Method names called later in a fluent chain: supabase.from('t').select().eq() -> [select, eq]. */
