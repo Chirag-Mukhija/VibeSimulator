@@ -218,7 +218,7 @@ button.chip:hover { border-color: var(--accent); color: var(--text); }
 /* -------------------------------------------------------------- workspace */
 
 .workspace {
-  display: grid; grid-template-columns: 290px minmax(0, 1fr) 390px;
+  display: grid; grid-template-columns: 290px minmax(0, 1fr) 390px; grid-template-rows: minmax(0, 1fr);
   height: calc(100vh - var(--topbar)); overflow: hidden;
 }
 .workspace.wide { grid-template-columns: 290px minmax(0, 1fr); }
@@ -394,17 +394,27 @@ a.card:hover { border-color: var(--accent); text-decoration: none; }
 
 /* ---------------------------------------------------------------- findings */
 
-.findings-page { padding: 20px 24px 60px; display: grid; gap: 12px; max-width: 920px; }
+.findings-page { padding: 20px 24px 60px; display: grid; gap: 12px; max-width: 960px; margin-inline: auto; }
 .filter-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 
 /* --------------------------------------------------------------------- map */
 
 .map-wrap { flex: 1; overflow: auto; min-height: 0; }
+.map-stack { display: grid; gap: 6px; padding: 18px 16px 40px; }
+.map-stack-col { display: grid; gap: 8px; }
+.map-stack-arrow { justify-self: center; color: var(--text-faint); font-size: 16px; line-height: 1; padding: 2px 0 4px; }
+.map-stack-card {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: center; text-align: left;
+  padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg-elev); font-size: 13px;
+}
+.map-stack-card.sel { border-color: var(--accent); background: var(--accent-soft); }
 
 /* ----------------------------------------------------------------- mobile */
 
 .mobile-only { display: none; }
+.drawer-only { display: none; }
 @media (max-width: 1100px) {
+  .inspector .drawer-only { display: flex; }
   .workspace { grid-template-columns: 260px minmax(0, 1fr); }
   .inspector {
     position: fixed; right: 0; top: var(--topbar); bottom: 0; width: min(420px, 100vw); z-index: 30;
@@ -433,12 +443,12 @@ a.card:hover { border-color: var(--accent); text-decoration: none; }
 
 [hidden] { display: none !important; }
 @media (max-width: 560px) {
-  .topbar:has(.tabs) .brand > span:last-child { display: none; }
-  .tab { padding: 5px 8px; font-size: 13px; flex-shrink: 0; }
   .topbar { gap: 6px; }
-  /* Five tabs don't fit a phone: the strip scrolls sideways instead of pushing the icons off. */
-  .tabs { min-width: 0; flex-shrink: 1; overflow-x: auto; scrollbar-width: none; }
-  .tabs::-webkit-scrollbar { display: none; }
+  /* Five tabs don't fit beside the brand on a phone: they get their own full-width row. */
+  :root:has(.topbar .tabs) { --topbar: 100px; }
+  .topbar:has(.tabs) { flex-wrap: wrap; align-content: center; row-gap: 6px; padding-block: 6px; height: var(--topbar); }
+  .topbar .tabs { order: 10; flex: 1 0 100%; min-width: 0; }
+  .tab { flex: 1 1 0; justify-content: center; padding: 6px 4px; font-size: 13px; min-width: 0; }
 }
 
 /* ------------------------------------------------------------------- learn */
@@ -479,7 +489,7 @@ a.card:hover { border-color: var(--accent); text-decoration: none; }
 /* ---------------------------------------------------------------- overview */
 
 .workspace.solo { grid-template-columns: minmax(0, 1fr); }
-.overview { padding: 24px 28px 60px; display: grid; gap: 20px; max-width: 1180px; }
+.overview { padding: 24px 28px 60px; display: grid; gap: 20px; max-width: 1240px; margin-inline: auto; width: 100%; }
 .overview-hero { display: grid; gap: 8px; }
 .overview-hero h2 { font-size: 24px; }
 .overview-hero p { margin: 0; }
@@ -489,7 +499,7 @@ a.card:hover { border-color: var(--accent); text-decoration: none; }
 .overview .card { gap: 12px; }
 .overview .card h3 { font-size: 15px; }
 ul.plain { margin: 0; padding-left: 18px; display: grid; gap: 6px; color: var(--text-dim); font-size: 13.5px; }
-.linklike { background: none; border: 0; padding: 0; color: var(--text-dim); cursor: pointer; text-align: left; font: inherit; }
+.linklike { background: none; border: 0; padding: 0; color: var(--text-dim); cursor: pointer; text-align: left; font: inherit; vertical-align: top; }
 .linklike:hover { color: var(--accent-text); text-decoration: underline; }
 .tour { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .tour-stop { display: flex; gap: 12px; align-items: flex-start; width: 100%; text-align: left; padding: 10px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg); cursor: pointer; }
@@ -502,7 +512,7 @@ ul.plain { margin: 0; padding-left: 18px; display: grid; gap: 6px; color: var(--
 
 /* ------------------------------------------------------------------ scale */
 
-.scale { padding: 20px 24px 60px; display: grid; gap: 16px; max-width: 1100px; }
+.scale { padding: 20px 24px 60px; display: grid; gap: 16px; max-width: 1140px; margin-inline: auto; }
 .scale-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; align-items: start; }
 .scale .card { gap: 12px; }
 .scale .card h3 { font-size: 15px; }

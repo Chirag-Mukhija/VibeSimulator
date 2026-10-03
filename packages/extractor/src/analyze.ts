@@ -52,6 +52,8 @@ const FN_KIND_RANK: Record<string, number> = { service: 0, worker: 1, middleware
 const RESOURCE_TYPES = new Set(["pg-pool", "pg-client", "mysql", "redis-client", "prisma", "mongoose-model", "drizzle"]);
 
 /** Analyzes a repository and returns a validated Trace Spec. */
+const GENERIC_SCRIPT_NAMES = new Set(["start", "dev", "serve", "server", "prod", "production", "main", "run"]);
+
 export function analyzeRepo(root: string, options: AnalyzeOptions = {}): TraceSpec {
   const repo = loadRepo(root);
   return new Analyzer(repo, options).run();
@@ -857,7 +859,9 @@ class Analyzer {
         || this.r.allHandles().some((h) => h.type === "http-server" && reach.has(h.created.getSourceFile()));
       const id = `svc:${p.name}`;
       if (this.services.some((s) => s.id === id)) continue;
-      this.services.push({ id, kind: http ? "http-server" : "worker", label: `${p.name} (${p.file})`, evidence: [this.evAt(p.evidence.file, p.evidence.line)], props: { entry: p.file } });
+      // "start (app.js)" says less than "app.js": generic script names give way to the entry file.
+      const label = GENERIC_SCRIPT_NAMES.has(p.name) ? p.file : `${p.name} (${p.file})`;
+      this.services.push({ id, kind: http ? "http-server" : "worker", label, evidence: [this.evAt(p.evidence.file, p.evidence.line)], props: { entry: p.file } });
       for (const f of reach) {
         const rel = relPath(this.repo, f);
         if (!this.fileServices.has(rel)) this.fileServices.set(rel, id);

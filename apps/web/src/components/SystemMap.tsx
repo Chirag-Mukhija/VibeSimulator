@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { TraceNode } from "@vibesim/spec";
 import type { Model } from "../lib/model.ts";
 import { worstSeverity } from "../lib/model.ts";
@@ -9,6 +9,15 @@ const CARD_W = 200;
 const RES_W = 230;
 const COL_GAP = 96;
 const GAP = 14;
+/** Below these the map stops shrinking and scrolls sideways instead (phones). */
+const MIN_CARD_W = 150;
+const MIN_RES_W = 170;
+const MIN_COL_GAP = 44;
+/** Short columns sit at most this far down, so they stay on screen next to a long list. */
+const MAX_CENTER_OFFSET = 150;
+/** Narrower than this (phones), columns become stacked sections. */
+const STACK_BELOW = 620;
+const COLUMN_TITLES = ["Who calls", "In front", "Your processes", "What they talk to"];
 
 interface Card {
   id: string;
@@ -33,40 +42,63 @@ interface Link {
 export function SystemMap({ model, selected, onSelect }: { model: Model; selected?: string; onSelect(id: string): void }) {
   const { cards, links, height } = useMemo(() => layout(model), [model]);
   const byId = new Map(cards.map((c) => [c.id, c]));
+  const wrap = useRef<HTMLDivElement>(null);
+  const available = useWidth(wrap);
   // Empty columns (no proxy in front) take no space.
   const used = [0, 1, 2, 3].filter((col) => cards.some((c) => c.col === col));
+  // Shrink gaps first, then cards, to fit the space; past the minimums the map scrolls.
+  const natural = (cw: number, rw: number, gap: number) => 48 + used.reduce((a, col) => a + (col === 3 ? rw : cw), 0) + gap * (used.length - 1);
+  let cardW = CARD_W;
+  let resW = RES_W;
+  let colGap = COL_GAP;
+  if (available && natural(cardW, resW, colGap) > available) {
+    colGap = Math.max(MIN_COL_GAP, colGap - (natural(cardW, resW, colGap) - available) / Math.max(1, used.length - 1));
+    const over = natural(cardW, resW, colGap) - available;
+    if (over > 0) {
+      const scale = Math.max(MIN_CARD_W / CARD_W, 1 - over / (natural(cardW, resW, 0) - 48));
+      cardW = Math.max(MIN_CARD_W, Math.floor(CARD_W * scale));
+      resW = Math.max(MIN_RES_W, Math.floor(RES_W * scale));
+    }
+  }
+  if (available !== undefined && available < STACK_BELOW) {
+    return <StackedMap model={model} cards={cards} links={links} used={used} selected={selected} onSelect={onSelect} wrap={wrap} />;
+  }
   const COL_X: number[] = [];
   let cursor = 24;
   for (const col of [0, 1, 2, 3]) {
     COL_X[col] = cursor;
-    if (used.includes(col)) cursor += (col === 3 ? RES_W : CARD_W) + COL_GAP;
+    if (used.includes(col)) cursor += (col === 3 ? resW : cardW) + colGap;
   }
-  const width = cursor - COL_GAP + 24;
+  const width = cursor - colGap + 24;
+  const widthOf = (col: number) => (col === 3 ? resW : cardW);
   return (
-    <div className="map-wrap" data-testid="system-map">
+    <div className="map-wrap" data-testid="system-map" ref={wrap}>
       <div style={{ padding: "16px 24px 0" }}>
         <h2 style={{ fontSize: 18 }}>Architecture at a glance</h2>
         <p className="muted" style={{ margin: "4px 0 0", fontSize: 13 }}>Built from the flows: each line is real traffic between a process and what it talks to. Click a box for details.</p>
       </div>
       <div style={{ position: "relative", width, height: height + 40, margin: "20px 0 40px" }}>
-        {["Who calls", "In front", "Your processes", "What they talk to"].map((t, i) => used.includes(i) && (
+        {COLUMN_TITLES.map((t, i) => used.includes(i) && (
           <div key={t} className="insp-label" style={{ position: "absolute", left: COL_X[i], top: 0 }}>{t}</div>
         ))}
         <svg width={width} height={height + 40} style={{ position: "absolute", inset: 0 }}>
-          {links.map((l, i) => {
+          {links.map((l, i, all) => {
             const a = byId.get(l.from);
             const b = byId.get(l.to);
             if (!a || !b) return null;
             const ltr = a.col < b.col;
-            const x1 = ltr ? COL_X[a.col]! + (a.col === 3 ? RES_W : CARD_W) : COL_X[a.col]!;
-            const x2 = ltr ? COL_X[b.col]! : COL_X[b.col]! + CARD_W;
+            const x1 = ltr ? COL_X[a.col]! + widthOf(a.col) : COL_X[a.col]!;
+            const x2 = ltr ? COL_X[b.col]! : COL_X[b.col]! + widthOf(b.col);
             const y1 = a.y + a.height / 2 + 24;
             const y2 = b.y + b.height / 2 + 24;
             const mx = (x1 + x2) / 2;
+            // Label next to the box it points at, so a fan of many lines stays readable.
+            const lx = ltr ? x2 - 6 : x2 + 6;
+            const firstLabel = all.findIndex((o) => o.to === l.to && o.label === l.label && (byId.get(o.from)!.col < b.col) === ltr) === i;
             return (
               <g key={i}>
                 <path d={`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`} fill="none" stroke={l.color} strokeWidth={1.4 + Math.min(3, l.count / 4)} opacity={0.55} />
-                <text x={mx} y={(y1 + y2) / 2 - 4} textAnchor="middle" fontSize="10.5" fill="var(--text-faint)" fontFamily="var(--mono)">{l.label}</text>
+                {firstLabel && <text x={lx} y={y2 - 6} textAnchor={ltr ? "end" : "start"} fontSize="10.5" fill="var(--text-faint)" fontFamily="var(--mono)">{l.label}</text>}
               </g>
             );
           })}
@@ -80,8 +112,8 @@ export function SystemMap({ model, selected, onSelect }: { model: Model; selecte
               key={c.id}
               onClick={() => c.node && onSelect(c.node.id)}
               style={{
-                position: "absolute", left: COL_X[c.col], top: c.y + 24, width: c.col === 3 ? RES_W : CARD_W, height: c.height,
-                textAlign: "left", padding: "9px 11px", borderRadius: 10, cursor: c.node ? "pointer" : "default",
+                position: "absolute", left: COL_X[c.col], top: c.y + 24, width: widthOf(c.col), height: c.height,
+                textAlign: "left", padding: "9px 11px", borderRadius: 6, cursor: c.node ? "pointer" : "default",
                 border: `1px solid ${sel ? "var(--accent)" : "var(--border-strong)"}`, background: sel ? "var(--accent-soft)" : "var(--bg-elev)",
                 boxShadow: `inset 3px 0 0 ${color}`, display: "grid", gridTemplateColumns: "auto 1fr", gap: "1px 8px", alignContent: "center",
               }}
@@ -92,6 +124,51 @@ export function SystemMap({ model, selected, onSelect }: { model: Model; selecte
             </button>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+/** Phone layout: one section per column, top to bottom; each box says what reaches it and how. */
+function StackedMap({ model, cards, links, used, selected, onSelect, wrap }: {
+  model: Model; cards: Card[]; links: Link[]; used: number[]; selected?: string; onSelect(id: string): void; wrap: React.RefObject<HTMLDivElement | null>;
+}) {
+  const titleOf = new Map(cards.map((c) => [c.id, c.title]));
+  const into = (c: Card) => {
+    const incoming = links.filter((l) => l.to === c.id && titleOf.has(l.from));
+    const byLabel = new Map<string, string[]>();
+    for (const l of incoming) byLabel.set(l.label, [...(byLabel.get(l.label) ?? []), titleOf.get(l.from)!]);
+    return [...byLabel].map(([label, from]) => `${label} from ${from.join(", ")}`).join(" · ");
+  };
+  return (
+    <div className="map-wrap" data-testid="system-map" ref={wrap}>
+      <div style={{ padding: "16px 16px 0" }}>
+        <h2 style={{ fontSize: 18 }}>Architecture at a glance</h2>
+        <p className="muted" style={{ margin: "4px 0 0", fontSize: 13 }}>Built from the flows, top to bottom: who calls, what sits in front, your processes and what they talk to. Tap a box for details.</p>
+      </div>
+      <div className="map-stack">
+        {used.map((col, i) => (
+          <section key={col} className="map-stack-col">
+            {i > 0 && <span className="map-stack-arrow" aria-hidden="true">↓</span>}
+            <span className="insp-label">{COLUMN_TITLES[col]}</span>
+            {cards.filter((c) => c.col === col).map((c) => {
+              const color = c.node ? nodeColor(c.node) : c.kind === "frontend" ? "var(--k-actor)" : "var(--k-code)";
+              const sev = c.node ? worstSeverity(model.findingsByRef.get(c.node.id) ?? []) : undefined;
+              const via = into(c);
+              return (
+                <button key={c.id} className={`map-stack-card${c.node && selected === c.node.id ? " sel" : ""}`} onClick={() => c.node && onSelect(c.node.id)}
+                  style={{ boxShadow: `inset 3px 0 0 ${color}`, cursor: c.node ? "pointer" : "default" }}>
+                  <NodeIcon kind={c.kind === "frontend" ? "ui-event" : c.kind} size={17} color={color} />
+                  <span style={{ display: "grid", minWidth: 0 }}>
+                    <b className="ellipsis">{c.title}</b>
+                    <span className="faint row" style={{ gap: 5, fontSize: 12 }}>{sev && <span className={`sev ${sev}`} />}{c.subtitle}</span>
+                    {via && <span className="mono faint" style={{ fontSize: 11 }}>{via}</span>}
+                  </span>
+                </button>
+              );
+            })}
+          </section>
+        ))}
       </div>
     </div>
   );
@@ -169,8 +246,22 @@ function layout(model: Model): { cards: Card[]; links: Link[]; height: number } 
   for (let col = 0; col < 3; col++) {
     const colCards = cards.filter((x) => x.col === col);
     const used = colCards.reduce((a, c) => a + c.height + GAP, 0);
-    const offset = Math.max(0, (height - used) / 2);
+    const offset = Math.min(MAX_CENTER_OFFSET, Math.max(0, (height - used) / 2));
     for (const c of colCards) c.y += offset;
   }
   return { cards, links: [...links.values()], height };
+}
+
+/** Content width of an element, kept up to date as it resizes. */
+function useWidth(ref: React.RefObject<HTMLElement | null>): number | undefined {
+  const [width, setWidth] = useState<number | undefined>();
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
+    ro.observe(el);
+    setWidth(el.clientWidth);
+    return () => ro.disconnect();
+  }, [ref]);
+  return width;
 }

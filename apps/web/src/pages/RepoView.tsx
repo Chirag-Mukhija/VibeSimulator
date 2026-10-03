@@ -145,9 +145,9 @@ export function RepoView({ route, id }: { route: Route; id: string }) {
               onExit={() => navigate(["repo", id], { tab: "overview" }, false)} />
           )}
         </main>
-        {tab !== "findings" && tab !== "overview" && (
+        {(tab === "flows" || tab === "map") && (
           <aside className={`inspector panel${inspectorOpen ? " open" : ""}`}>
-            <div className="row mobile-only" style={{ justifyContent: "flex-end", padding: "8px 8px 0" }}>
+            <div className="row drawer-only" style={{ justifyContent: "flex-end", padding: "8px 8px 0" }}>
               <button className="btn icon ghost" onClick={() => setInspectorOpen(false)} aria-label="Close details"><Icon name="close" /></button>
             </div>
             <Inspector model={model} selection={selection} onOpenConcept={setConceptId} onShowFlow={showFlow} />

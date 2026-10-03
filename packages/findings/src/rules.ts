@@ -77,7 +77,7 @@ const STORE_KINDS = new Set(["database", "cache"]);
 const CODE_KINDS = new Set(["handler", "service", "middleware", "worker"]);
 
 const n = (x: number) => x.toLocaleString("en-US");
-const plural = (count: number, word: string) => `${n(count)} ${word}${count === 1 ? "" : "s"}`;
+const plural = (count: number, word: string) => `${n(count)} ${count === 1 ? word : /(s|sh|ch|x)$/.test(word) ? `${word}es` : `${word}s`}`;
 const fmtMs = (ms: number) => (ms >= 1000 && ms % 1000 === 0 ? `${ms / 1000} s` : `${n(ms)} ms`);
 
 function storeLabel(node: TraceNode): string {
@@ -252,7 +252,7 @@ export const RULES: Rule[] = [
           out.push({
             rule: "threadpool-saturation", severity: "medium", concept: "concurrency-models", ref: e.id,
             title: `${e.label ?? to.label} competes for libuv's 4 threads`,
-            consequence: `Hashing runs off the main thread, but on a pool of only 4 threads by default. At work factor ${cost} each hash takes roughly ${n(ms)} ms (estimate), so one process handles about ${plural(perSecond, "hash")} per second before logins queue, and file and DNS work queues behind them too.`,
+            consequence: `Hashing runs off the main thread, but on a pool of only 4 threads by default. At work factor ${cost} each hash takes roughly ${n(ms)} ms (estimate), so one process handles about ${plural(perSecond, "hash")} per second before requests start queueing for a thread, and file and DNS work waits behind them too.`,
             fix: "Raise UV_THREADPOOL_SIZE, run more instances, or rate-limit the endpoint.",
             evidence: e.evidence, data: { estimatedMs: ms, cost, perSecondPerProcess: perSecond },
           });

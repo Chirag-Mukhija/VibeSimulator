@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Finding } from "@vibesim/spec";
 import type { Timeline } from "../lib/model.ts";
 import { worstSeverity } from "../lib/model.ts";
@@ -8,7 +8,9 @@ import { NodeIcon, nodeColor } from "./ui.tsx";
 const MARKER_COLORS = ["actor", "edge", "entry", "code", "database", "cache", "messaging", "external", "compute", "unknown", "faint"] as const;
 const markerColor = (c: (typeof MARKER_COLORS)[number]) => (c === "faint" ? "var(--text-faint)" : `var(--k-${c})`);
 
-const COL_W = 172;
+const MIN_COL_W = 172;
+/** Columns widen to use spare space on big screens, up to this. */
+const MAX_COL_W = 240;
 const HEAD_H = 70;
 const ROW_H = 46;
 const PAD_X = 24;
@@ -29,6 +31,16 @@ interface Props {
 export function SequenceDiagram({ timeline, active, progress, selected, findingsByRef, onSelectItem, onSelectNode }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const { participants, items } = timeline;
+  const [available, setAvailable] = useState(0);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setAvailable(el.clientWidth));
+    ro.observe(el);
+    setAvailable(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
+  const COL_W = Math.round(Math.min(MAX_COL_W, Math.max(MIN_COL_W, (available - PAD_X * 2) / Math.max(1, participants.length))));
   const col = useMemo(() => new Map(participants.map((p, i) => [p.id, i])), [participants]);
   const x = (id: string) => PAD_X + (col.get(id) ?? 0) * COL_W + COL_W / 2;
   const y = (i: number) => PAD_Y + i * ROW_H + ROW_H / 2;
@@ -79,7 +91,7 @@ export function SequenceDiagram({ timeline, active, progress, selected, findings
                 title={`${kindInfo(p.node.kind).title}: ${p.node.label}`}
                 style={{
                   position: "absolute", left: PAD_X + i * COL_W + 8, top: 10, width: COL_W - 16, height: HEAD_H - 20,
-                  borderRadius: 9, border: `1px solid ${sel ? "var(--accent)" : "var(--border-strong)"}`,
+                  borderRadius: 6, border: `1px solid ${sel ? "var(--accent)" : "var(--border-strong)"}`,
                   background: sel ? "var(--accent-soft)" : "var(--bg-elev)", cursor: "pointer", padding: "6px 9px",
                   textAlign: "left", display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 7px", alignContent: "center",
                   boxShadow: `inset 3px 0 0 ${color}`, borderStyle: p.node.confidence === "unresolved" ? "dashed" : "solid",

@@ -22,6 +22,7 @@ const plural = (n: number, word: string) => `${n} ${n === 1 ? word : /(s|sh|ch|x
 /** Picks the verb form that agrees with the count. */
 const agree = (n: number, one: string, many: string) => (n === 1 ? one : many);
 const short = (label: string) => label.replace(/\s*\(.*\)$/, "");
+const LIBRARY_NAMES: Record<string, string> = { mongoose: "Mongoose", prisma: "Prisma", drizzle: "Drizzle", mongodb: "the MongoDB driver", mysql2: "mysql2", supabase: "Supabase", pg: "pg" };
 
 export function buildOverview(model: Model): Overview {
   const { spec, nodes, edges } = model;
@@ -43,18 +44,24 @@ export function buildOverview(model: Model): Overview {
 
   const madeOf: string[] = [];
   if (procs.length) madeOf.push(`Processes: ${list(procs.map((p) => `${short(p.label)} (${p.kind === "worker" ? "background worker" : "HTTP server"})`))}.`);
-  if (frontends.length) madeOf.push(`Browser code: ${list(frontends.map((f) => short(f.label)))}.`);
+  // "Browser (client components)" reads as "client components", "dashboard.html (browser)" as "dashboard.html".
+  if (frontends.length) madeOf.push(`Browser code: ${list(frontends.map((f) => short(f.label.replace(/^Browser \((.*)\)$/, "$1"))))}.`);
   if (proxies.length) madeOf.push(`${list(proxies.map((p) => p.label))} sits in front and forwards every request.`);
   for (const db of dbs) {
     const pool = typeof db.props.poolMax === "number" ? ` through a pool of ${db.props.poolMax} connections${db.props.poolMaxDefault ? " (library default)" : ""}` : "";
     const tables = db.props.tables ? `; the repo's SQL defines ${plural(Object.keys(db.props.tables as object).length, "table")}` : "";
-    madeOf.push(`${short(db.label)}${pool}${tables}.`);
+    const via = !pool && typeof db.props.library === "string" ? `, through ${LIBRARY_NAMES[db.props.library] ?? db.props.library}` : "";
+    madeOf.push(`${short(db.label)}${via}${pool}${tables}.`);
   }
   for (const c of caches) madeOf.push(`${short(c.label)}, used for ${list(usesOf(model, c))}.`);
   if (topics.length) madeOf.push(`Pub/sub channel${topics.length > 1 ? "s" : ""}: ${list(topics.map((t) => `"${String(t.props.channel)}"`))}.`);
   if (queues.length) madeOf.push(`Job queue${queues.length > 1 ? "s" : ""}: ${list(queues.map((q) => `"${String(q.props.name)}"`))}.`);
   if (ws.length) madeOf.push(`WebSocket endpoint${ws.length > 1 ? "s" : ""} for pushing updates to browsers.`);
-  if (externals.length) madeOf.push(`Calls ${plural(externals.length, "outside service")}: ${list(externals.slice(0, 6).map((e) => e.label))}${externals.length > 6 ? ", and more" : ""}.`);
+  if (externals.length) {
+    const names = externals.map((e) => e.label);
+    const shown = names.length > 6 ? `${names.slice(0, 6).join(", ")} and ${names.length - 6} more` : list(names);
+    madeOf.push(`Calls ${plural(externals.length, "outside service")}: ${shown}.`);
+  }
   if (frameworks.length) madeOf.push(`Libraries recognized: ${list(frameworks)}.`);
 
   const entryKinds = new Map<string, number>();
@@ -104,7 +111,7 @@ export function buildOverview(model: Model): Overview {
   if (used.has("transactions")) talkingPoints.push(`Writes that must happen together use a transaction on one checked-out connection (BEGIN, the inserts, COMMIT, ROLLBACK on error).`);
   if (used.has("rate-limiting")) {
     const shared = spec.nodes.some((n) => n.props.library === "express-rate-limit" && spec.edges.some((e) => e.from === n.id && (nodes.get(e.to)!.kind === "cache" || nodes.get(e.to)!.kind === "database")));
-    talkingPoints.push(`Rate limiting ${shared ? "keeps its counters in a shared store, so limits hold across instances" : "runs in memory, which is fine for one instance and leaks with several"}.`);
+    talkingPoints.push(`Rate limiting ${shared ? "keeps its counters in a shared store, so limits hold across instances" : "runs in memory, which works on one instance; with several, each keeps its own count and the real limit multiplies"}.`);
   }
   const top = spec.findings.filter((f) => f.severity === "high" || f.severity === "medium").slice(0, 2);
   for (const f of top) talkingPoints.push(`Known scaling risk: ${f.title}. ${f.fix ?? ""}`.trim());
