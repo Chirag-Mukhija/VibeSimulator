@@ -1,0 +1,16 @@
+{
+  "name": "@vibesim/spec",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./schema.json": "./schema/trace-spec.v1.schema.json"
+  },
+  "scripts": {
+    "build:schema": "node scripts/build-schema.ts"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  }
+}

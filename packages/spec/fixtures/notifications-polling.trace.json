@@ -1,0 +1,214 @@
+{
+  "$schema": "../schema/trace-spec.v1.schema.json",
+  "schemaVersion": "1",
+  "meta": {
+    "generatedAt": "2026-10-03T00:00:00Z",
+    "generator": { "name": "hand-written-fixture", "version": "0.1.0" },
+    "repo": { "name": "chat-example", "commit": "3f9c2ab" },
+    "frameworks": ["react", "express", "pg", "ws", "redis"]
+  },
+  "nodes": [
+    {
+      "id": "timer:poll-notifications",
+      "kind": "timer",
+      "label": "Poll notifications every 5s",
+      "evidence": [{ "file": "web/src/hooks/useNotifications.ts", "line": 9, "snippet": "const id = setInterval(fetchNotifications, 5000)" }],
+      "confidence": "verified",
+      "concepts": ["short-polling"],
+      "props": { "intervalMs": 5000 }
+    },
+    {
+      "id": "route:GET:/api/notifications",
+      "kind": "route",
+      "label": "GET /api/notifications",
+      "evidence": [{ "file": "api/src/routes/notifications.ts", "line": 5, "snippet": "app.get(\"/api/notifications\", listNotifications)" }],
+      "confidence": "verified",
+      "props": { "method": "GET", "path": "/api/notifications" }
+    },
+    {
+      "id": "handler:listNotifications",
+      "kind": "handler",
+      "label": "listNotifications",
+      "evidence": [{ "file": "api/src/handlers/notifications.ts", "line": 7, "snippet": "export async function listNotifications(req, res) {" }],
+      "confidence": "verified"
+    },
+    {
+      "id": "db:postgres",
+      "kind": "database",
+      "label": "Postgres (pg)",
+      "evidence": [{ "file": "api/src/handlers/notifications.ts", "line": 8, "snippet": "const client = new Client(process.env.DATABASE_URL)" }],
+      "confidence": "verified",
+      "concepts": ["connection-pooling"],
+      "props": { "engine": "postgres", "client": "pg" }
+    },
+    {
+      "id": "ui:send-message",
+      "kind": "ui-event",
+      "label": "Submit chat message",
+      "evidence": [{ "file": "web/src/components/Chat.tsx", "line": 31, "snippet": "<form onSubmit={sendMessage}>" }],
+      "confidence": "verified"
+    },
+    {
+      "id": "ws:chat",
+      "kind": "ws-endpoint",
+      "label": "WebSocket /ws",
+      "evidence": [{ "file": "api/src/ws.ts", "line": 12, "snippet": "const wss = new WebSocketServer({ server, path: \"/ws\" })" }],
+      "confidence": "verified",
+      "concepts": ["websocket"],
+      "props": { "path": "/ws" }
+    },
+    {
+      "id": "handler:onChatMessage",
+      "kind": "handler",
+      "label": "onChatMessage",
+      "evidence": [{ "file": "api/src/ws.ts", "line": 15, "snippet": "socket.on(\"message\", onChatMessage)" }],
+      "confidence": "verified"
+    },
+    {
+      "id": "topic:chat",
+      "kind": "topic",
+      "label": "Redis channel \"chat\"",
+      "evidence": [{ "file": "api/src/ws.ts", "line": 18, "snippet": "await pub.publish(\"chat\", JSON.stringify(msg))" }],
+      "confidence": "verified",
+      "concepts": ["pub-sub"],
+      "props": { "broker": "redis", "channel": "chat" }
+    },
+    {
+      "id": "handler:fanOut",
+      "kind": "handler",
+      "label": "fanOut",
+      "evidence": [{ "file": "api/src/ws.ts", "line": 24, "snippet": "sub.on(\"message\", fanOut)" }],
+      "confidence": "verified"
+    }
+  ],
+  "edges": [
+    {
+      "id": "e:poll-fetch",
+      "from": "timer:poll-notifications",
+      "to": "route:GET:/api/notifications",
+      "protocol": "http",
+      "lifecycle": "pooled",
+      "mode": "sync",
+      "label": "GET /api/notifications every 5s",
+      "evidence": [{ "file": "web/src/hooks/useNotifications.ts", "line": 10, "snippet": "const res = await fetch(\"/api/notifications\")" }],
+      "confidence": "verified"
+    },
+    {
+      "id": "e:route-list",
+      "from": "route:GET:/api/notifications",
+      "to": "handler:listNotifications",
+      "protocol": "in-process",
+      "lifecycle": "none",
+      "mode": "sync",
+      "evidence": [{ "file": "api/src/routes/notifications.ts", "line": 5 }],
+      "confidence": "verified"
+    },
+    {
+      "id": "e:list-query",
+      "from": "handler:listNotifications",
+      "to": "db:postgres",
+      "protocol": "sql",
+      "lifecycle": "new-per-request",
+      "mode": "sync",
+      "label": "connect, SELECT notifications, disconnect",
+      "evidence": [{ "file": "api/src/handlers/notifications.ts", "line": 9, "endLine": 11, "snippet": "await client.connect()" }],
+      "confidence": "verified"
+    },
+    {
+      "id": "e:send-ws",
+      "from": "ui:send-message",
+      "to": "ws:chat",
+      "protocol": "ws",
+      "lifecycle": "persistent",
+      "mode": "async",
+      "label": "socket.send(message)",
+      "evidence": [{ "file": "web/src/components/Chat.tsx", "line": 33, "snippet": "socket.send(JSON.stringify({ text }))" }],
+      "confidence": "verified"
+    },
+    {
+      "id": "e:ws-dispatch",
+      "from": "ws:chat",
+      "to": "handler:onChatMessage",
+      "protocol": "in-process",
+      "lifecycle": "none",
+      "mode": "sync",
+      "evidence": [{ "file": "api/src/ws.ts", "line": 15 }],
+      "confidence": "verified"
+    },
+    {
+      "id": "e:publish",
+      "from": "handler:onChatMessage",
+      "to": "topic:chat",
+      "protocol": "redis",
+      "lifecycle": "persistent",
+      "mode": "async",
+      "label": "PUBLISH chat",
+      "evidence": [{ "file": "api/src/ws.ts", "line": 18 }],
+      "confidence": "verified"
+    },
+    {
+      "id": "e:subscribe",
+      "from": "topic:chat",
+      "to": "handler:fanOut",
+      "protocol": "redis",
+      "lifecycle": "persistent",
+      "mode": "async",
+      "label": "every server instance receives it",
+      "evidence": [{ "file": "api/src/ws.ts", "line": 24 }],
+      "confidence": "verified"
+    },
+    {
+      "id": "e:broadcast",
+      "from": "handler:fanOut",
+      "to": "ws:chat",
+      "protocol": "ws",
+      "lifecycle": "persistent",
+      "mode": "async",
+      "label": "push to every connected socket",
+      "evidence": [{ "file": "api/src/ws.ts", "line": 27, "snippet": "for (const s of wss.clients) s.send(data)" }],
+      "confidence": "verified"
+    }
+  ],
+  "flows": [
+    {
+      "id": "flow:poll-notifications",
+      "label": "Notification polling",
+      "entry": "timer:poll-notifications",
+      "steps": [{ "edge": "e:poll-fetch" }, { "edge": "e:route-list" }, { "edge": "e:list-query" }]
+    },
+    {
+      "id": "flow:send-chat-message",
+      "label": "Send a chat message",
+      "entry": "ui:send-message",
+      "steps": [
+        { "edge": "e:send-ws" },
+        { "edge": "e:ws-dispatch" },
+        { "edge": "e:publish" },
+        { "edge": "e:subscribe" },
+        { "edge": "e:broadcast" }
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "id": "finding:conn-per-request",
+      "rule": "connection-per-request",
+      "severity": "high",
+      "title": "New Postgres connection on every notifications request",
+      "consequence": "Each request pays a TCP and auth handshake, and Postgres has a hard connection limit. Combined with polling, a few thousand open tabs exhaust it.",
+      "concept": "connection-pooling",
+      "refs": ["e:list-query"],
+      "evidence": [{ "file": "api/src/handlers/notifications.ts", "line": 8, "endLine": 11 }]
+    },
+    {
+      "id": "finding:short-polling",
+      "rule": "polling-via-timer",
+      "severity": "medium",
+      "title": "Every open tab polls every 5 seconds",
+      "consequence": "10,000 open tabs means about 2,000 requests per second, almost all returning nothing new. Cost grows with users, not with notifications.",
+      "concept": "short-polling",
+      "refs": ["e:poll-fetch"],
+      "evidence": [{ "file": "web/src/hooks/useNotifications.ts", "line": 9 }]
+    }
+  ]
+}
