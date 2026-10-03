@@ -1,20 +1,28 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import type { Finding, TraceEdge, TraceNode } from "@vibesim/spec";
 import { concept } from "@vibesim/catalog";
 import type { Model } from "../lib/model.ts";
 import { flowsTouching } from "../lib/model.ts";
 import { edgeFlags, edgeSentence, kindInfo, lifecycleInfo, protocolInfo } from "../lib/explain.ts";
+import { chosenResponse, eventCaption, eventFacts, eventTitle } from "../lib/describe.ts";
+import type { ActiveEvent } from "./FlowStage.tsx";
 import { CodeBlock } from "./CodeBlock.tsx";
 import { KindChip, NodeIcon, nodeColor } from "./ui.tsx";
 
 interface Props {
   model: Model;
   selection?: string;
+  /** The step the devices view is showing; takes over the panel unless a box was clicked. */
+  event?: ActiveEvent;
   onOpenConcept(id: string): void;
   onShowFlow(flowId: string, ref: string): void;
 }
 
-export function Inspector({ model, selection, onOpenConcept, onShowFlow }: Props) {
+export function Inspector({ model, selection, event, onOpenConcept, onShowFlow }: Props) {
+  const ev = event?.scene.events[event.index];
+  if (event && ev && (!selection || selection === ev.edge.id)) {
+    return <EventView model={model} event={event} onOpenConcept={onOpenConcept} onShowFlow={onShowFlow} />;
+  }
   if (!selection) {
     return (
       <div className="empty">
@@ -28,6 +36,54 @@ export function Inspector({ model, selection, onOpenConcept, onShowFlow }: Props
   const node = model.nodes.get(selection);
   if (node) return <NodeView model={model} node={node} onOpenConcept={onOpenConcept} onShowFlow={onShowFlow} />;
   return <div className="empty">Nothing selected.</div>;
+}
+
+const KIND_TEXT: Record<string, string> = { request: "Request", send: "One-way message", reply: "Reply", ack: "Acknowledgement", response: "Response", local: "Function call" };
+
+/** One step of a flow, like Packet Tracer's PDU details: what travels, over what, and why. */
+function EventView({ model, event, onOpenConcept, onShowFlow }: { model: Model; event: ActiveEvent } & Pick<Props, "onOpenConcept" | "onShowFlow">) {
+  const { scene, index } = event;
+  const ev = scene.events[index]!;
+  const edge = ev.edge;
+  const to = model.nodes.get(edge.to)!;
+  const findings = [...(model.findingsByRef.get(edge.id) ?? []), ...(ev.kind === "request" || ev.kind === "local" ? model.findingsByRef.get(edge.to) ?? [] : [])];
+  const unique = findings.filter((f, i) => findings.findIndex((x) => x.id === f.id) === i);
+  const concepts = [...new Set([...edge.concepts, ...to.concepts, ...unique.flatMap((f) => (f.concept ? [f.concept] : []))])];
+  const response = ev.kind === "response" ? chosenResponse(model, scene, ev) : undefined;
+  const responder = ev.from.stage ? model.nodes.get(ev.from.stage) : undefined;
+  return (
+    <div className="insp" data-testid="inspector">
+      <div className="insp-section">
+        <div className="row wrap" style={{ gap: 6 }}>
+          <span className="chip accent">Step {index + 1} of {scene.events.length}</span>
+          <span className={`ev-kind ev-${ev.kind}`}>{KIND_TEXT[ev.kind]}</span>
+        </div>
+        <h3 style={{ wordBreak: "break-word" }}>{eventTitle(model, scene, ev)}</h3>
+        <p style={{ margin: 0, color: "var(--text-dim)" }}>{eventCaption(model, scene, ev)}</p>
+      </div>
+      <dl className="facts">
+        {eventFacts(model, scene, ev).map((f) => (
+          <Fragment key={f.label}><dt>{f.label}</dt><dd className={f.mono ? "mono" : undefined} style={f.mono ? { wordBreak: "break-word" } : undefined}>{f.value}</dd></Fragment>
+        ))}
+      </dl>
+      {ev.kind === "response" && response && responder ? (
+        <div className="insp-section">
+          <span className="insp-label">Where it answers</span>
+          <span className="mono" style={{ fontSize: 12.5 }}>{String(responder.props.file ?? responder.evidence[0]?.file)}:{response.line}</span>
+        </div>
+      ) : (
+        edge.evidence[0] && (
+          <div className="insp-section">
+            <span className="insp-label">{ev.kind === "reply" || ev.kind === "ack" ? "The call this answers" : "The code that does it"}</span>
+            <CodeBlock evidence={edge.evidence[0]} />
+          </div>
+        )
+      )}
+      <FindingsBlock findings={unique} onOpenConcept={onOpenConcept} />
+      <ConceptChips ids={concepts} onOpenConcept={onOpenConcept} />
+      <OtherFlows model={model} id={edge.id} onShowFlow={onShowFlow} />
+    </div>
+  );
 }
 
 function EdgeView({ model, edge, onOpenConcept, onShowFlow }: { model: Model; edge: TraceEdge } & Pick<Props, "onOpenConcept" | "onShowFlow">) {

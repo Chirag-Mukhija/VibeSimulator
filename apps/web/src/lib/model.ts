@@ -132,9 +132,18 @@ export function buildTimeline(model: Model, flow: Flow, opts: { collapseLibraryM
   const items: TimelineItem[] = [];
   // Open synchronous calls; each entry is waiting for its callee to finish.
   const stack: { edge: TraceEdge; from: string; to: string; stepIndex: number }[] = [];
+  // Middleware hands the request on with next() and gets nothing back; the handler answers the
+  // client itself. So no "returns" through middleware, the route, timers or page events.
+  const noReturn = (edge: TraceEdge) => {
+    const from = model.nodes.get(edge.from)!;
+    const to = model.nodes.get(edge.to)!;
+    // Kept: client -> route and proxy -> route, whose "return" is the response itself.
+    return to.kind === "middleware" || ["route", "middleware", "timer", "ui-event"].includes(from.kind);
+  };
   const closeUntil = (caller: string) => {
     while (stack.length && stack[stack.length - 1]!.to !== caller) {
       const open = stack.pop()!;
+      if (noReturn(open.edge)) continue;
       items.push({ kind: "return", edge: open.edge, from: open.to, to: open.from, depth: stack.length, stepIndex: open.stepIndex });
     }
   };

@@ -4,7 +4,7 @@ import { buildModel, type Model } from "../lib/model.ts";
 import { getLocalTrace, loadGalleryIndex, loadGalleryTrace, type GalleryEntry } from "../lib/data.ts";
 import { navigate, type Route } from "../lib/router.ts";
 import { FlowList } from "../components/FlowList.tsx";
-import { FlowStage } from "../components/FlowStage.tsx";
+import { FlowStage, type ActiveEvent } from "../components/FlowStage.tsx";
 import { Inspector } from "../components/Inspector.tsx";
 import { SystemMap } from "../components/SystemMap.tsx";
 import { FindingsView } from "../components/FindingsView.tsx";
@@ -45,7 +45,24 @@ export function RepoView({ route, id }: { route: Route; id: string }) {
   const [conceptId, setConceptId] = useState<string | undefined>();
   const [focusEdge, setFocusEdge] = useState<string | undefined>(sel);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Desktop: hide the flow list to give the devices view the room (remembered per browser).
+  const [listHidden, setListHidden] = useState(() => {
+    try {
+      return localStorage.getItem("vibesim:list-hidden") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleList = () => {
+    setListHidden(!listHidden);
+    try {
+      localStorage.setItem("vibesim:list-hidden", listHidden ? "0" : "1");
+    } catch {
+      // not persisted; fine
+    }
+  };
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [activeEvent, setActiveEvent] = useState<ActiveEvent | undefined>();
 
   const set = (q: Record<string, string | undefined>) => {
     navigate(["repo", id], { tab, flow: flowId, ...q }, true);
@@ -112,7 +129,7 @@ export function RepoView({ route, id }: { route: Route; id: string }) {
           ))}
         </div>
       </TopBar>
-      <div className={`workspace${tab === "findings" || tab === "scale" ? " wide" : ""}${tab === "map" ? " map" : ""}${tab === "overview" ? " solo" : ""}`}>
+      <div className={`workspace${listHidden && (tab === "flows" || tab === "scale") ? " list-hidden" : ""}${tab === "findings" || tab === "scale" ? " wide" : ""}${tab === "map" ? " map" : ""}${tab === "overview" ? " solo" : ""}`}>
         <aside className={`sidebar panel${sidebarOpen ? " open" : ""}`} hidden={tab === "map" || tab === "overview"}>
           <FlowList model={model} activeFlow={tab === "flows" || tab === "scale" ? scaleFlowId ?? flowId : undefined} onOpen={(fid) => {
             setSidebarOpen(false);
@@ -121,8 +138,13 @@ export function RepoView({ route, id }: { route: Route; id: string }) {
           }} />
         </aside>
         <main className="stage">
+          {(tab === "flows" || tab === "scale") && (
+            <button className="list-toggle" onClick={toggleList} title={listHidden ? "Show the flow list" : "Hide the flow list for more room"} aria-label={listHidden ? "Show the flow list" : "Hide the flow list"} data-testid="list-toggle">
+              {listHidden ? "›" : "‹"}
+            </button>
+          )}
           {tab === "flows" && (flow
-            ? <FlowStage key={flow.id} model={model} flow={flow} selected={selection} focusEdge={focusEdge} onSelect={(ref, explicit) => {
+            ? <FlowStage key={flow.id} model={model} flow={flow} selected={selection} focusEdge={focusEdge} onEvent={setActiveEvent} onSelect={(ref, explicit) => {
               setSelection(ref);
               if (explicit) setInspectorOpen(true);
             }} />
@@ -150,7 +172,7 @@ export function RepoView({ route, id }: { route: Route; id: string }) {
             <div className="row drawer-only" style={{ justifyContent: "flex-end", padding: "8px 8px 0" }}>
               <button className="btn icon ghost" onClick={() => setInspectorOpen(false)} aria-label="Close details"><Icon name="close" /></button>
             </div>
-            <Inspector model={model} selection={selection} onOpenConcept={setConceptId} onShowFlow={showFlow} />
+            <Inspector model={model} selection={selection} event={tab === "flows" ? activeEvent : undefined} onOpenConcept={setConceptId} onShowFlow={showFlow} />
           </aside>
         )}
       </div>

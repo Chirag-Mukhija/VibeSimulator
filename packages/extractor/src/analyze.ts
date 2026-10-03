@@ -500,7 +500,9 @@ class Analyzer {
       }
       if (resolved.route) {
         const to = this.routeNode(resolved.route);
-        flow.push(this.addEdge(from, to, { ...base, label: `${t.method} ${resolved.route.path}` }));
+        // A browser calling its own server: the browser's keep-alive connection, not a server-side pool.
+        const lifecycle = this.clientFiles.has(site.call.getSourceFile()) ? "keep-alive" : base.lifecycle;
+        flow.push(this.addEdge(from, to, { ...base, lifecycle, label: `${t.method} ${resolved.route.path}` }));
         this.expandRoute(flow, resolved.route);
       } else if (resolved.external) {
         const to = this.externalNode(resolved.external, resolved.external, site.call);

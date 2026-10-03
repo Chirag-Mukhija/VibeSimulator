@@ -27,14 +27,17 @@ const PAGES: { name: string; url: string; ready: string; then?: (page: Page) => 
   ...REPOS.flatMap((repo) => TABS.map((tab) => ({
     name: `${repo}-${tab}`,
     url: `/#/repo/${repo}?tab=${tab}`,
-    ready: tab === "scale" ? "[data-testid=scale-result]" : tab === "findings" ? "[data-testid=findings]" : ".stage > *",
+    ready: tab === "scale" ? "[data-testid=scale-result]" : tab === "findings" ? "[data-testid=findings]" : tab === "flows" ? "[data-testid=topology]" : ".stage > .map-wrap, .stage .overview",
   }))),
   ...REPOS.map((repo) => ({
     name: `${repo}-flows-inspector`,
     url: `/#/repo/${repo}?tab=flows`,
-    ready: "[data-testid=packet], .arrow-hit",
+    ready: "[data-testid=topology]",
     then: async (page: Page) => {
-      await page.locator(".arrow-hit").nth(1).click();
+      await page.locator(".dev-stages li button").nth(1).click();
+      const close = page.getByRole("button", { name: "Close details" });
+      if (await close.isVisible()) await close.click();
+      await page.getByTestId("event-list").locator("tr[data-index='4']").click();
       await page.waitForTimeout(250);
     },
   })),

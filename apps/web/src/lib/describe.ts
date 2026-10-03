@@ -1,6 +1,6 @@
 import type { TraceEdge, TraceNode } from "@vibesim/spec";
 import type { Model } from "./model.ts";
-import type { Device, Scene, SceneEvent } from "./scene.ts";
+import { branchKey, type Device, type Scene, type SceneEvent } from "./scene.ts";
 
 /**
  * Words for the devices view. Everything here is built from facts in the trace plus fixed
@@ -125,6 +125,8 @@ export function eventTitle(model: Model, scene: Scene, ev: SceneEvent): string {
     case "ack":
       return "Redis confirms";
     case "local": {
+      if (e.props.checkout) return "borrows a pool connection";
+      if (e.props.release) return "returns the connection";
       const stage = ev.to.stage?.startsWith("__library") ? "library middleware" : fnName(to);
       if (to.kind === "compute") return e.label ?? to.label;
       if (to.kind === "middleware") return `runs ${stage}`;
@@ -182,9 +184,15 @@ export function eventCaption(model: Model, scene: Scene, ev: SceneEvent): string
     case "response": {
       const source = dev(ev.from.device);
       const target = dev(ev.to.device);
+      const r = chosenResponse(model, scene, ev);
+      const what = r ? responseText(r) : "the response (status code, headers, body)";
       if (source?.kind === "proxy") add(`${source.label} passes the response back to ${deviceName(target)}. The request is complete.`);
-      else if (target?.kind === "proxy") add(`The handler's response (status code, headers, body) goes back to ${target.label}, on the same connection the request came in on.`);
-      else add(`The handler sends the response (status code, headers, body) back to ${deviceName(target)} on the same connection. The request is complete.`);
+      else if (target?.kind === "proxy") add(`The handler sends ${what} back to ${target.label}, on the connection the request came in on.`);
+      else add(`The handler sends ${what} back to ${deviceName(target)} on the same connection. The request is complete.`);
+      if (r && source?.kind !== "proxy") {
+        const others = otherResponses(model, ev, r);
+        if (others) add(others);
+      }
       break;
     }
   }
@@ -195,15 +203,73 @@ export function eventCaption(model: Model, scene: Scene, ev: SceneEvent): string
   return parts.join(" ");
 }
 
+/** A response a handler can send, as the extractor records it. */
+interface ResponseSite {
+  status?: number;
+  statusText: string;
+  kind: string;
+  body?: string;
+  line: number;
+  path: { condition: string; branch: "then" | "else"; guard?: boolean }[];
+  errorPath: boolean;
+}
+
+const STATUS_TEXT: Record<number, string> = { 200: "OK", 201: "Created", 204: "No Content", 301: "Moved", 302: "Found (redirect)", 304: "Not Modified", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found", 409: "Conflict", 422: "Unprocessable", 429: "Too Many Requests", 500: "Internal Server Error", 503: "Service Unavailable" };
+
+function responseText(r: ResponseSite): string {
+  const code = r.status ? `${r.status} ${STATUS_TEXT[r.status] ?? ""}`.trim() : r.statusText;
+  switch (r.kind) {
+    case "redirect": return `a ${code} redirect to ${r.body ?? "another page"}`;
+    case "render": return `${code} with the rendered page ${r.body ?? ""}`.trim();
+    case "file": return `${code} with a file (${r.body ?? "from disk"})`;
+    case "end": return `${code} with no body`;
+    case "error": return "the error to the error handler";
+    default: return `${code} with ${r.body ? `\`${r.body}\`` : "a body"}`;
+  }
+}
+
+/** The response the handler sends on the branches currently being played. */
+export function chosenResponse(model: Model, scene: Scene, ev: SceneEvent): ResponseSite | undefined {
+  const node = ev.from.stage ? model.nodes.get(ev.from.stage) : undefined;
+  const list = (node?.props.responses as ResponseSite[] | undefined)?.filter((r) => !r.errorPath && r.kind !== "error");
+  if (!list?.length) return undefined;
+  const fits = (r: ResponseSite) => r.path.every((b) => {
+    const branch = scene.branches.find((x) => x.key === branchKey(node!.id, b.condition));
+    return branch ? branch.chosen === b.branch : b.guard ? b.branch === "else" : b.branch === "then";
+  });
+  return list.find(fits) ?? list[list.length - 1];
+}
+
+/** "Otherwise it can answer 400 or 404": the other outcomes of this handler. */
+function otherResponses(model: Model, ev: SceneEvent, chosen: ResponseSite): string | undefined {
+  const node = ev.from.stage ? model.nodes.get(ev.from.stage) : undefined;
+  const all = (node?.props.responses as ResponseSite[] | undefined) ?? [];
+  const codes = [...new Set(all.filter((r) => r !== chosen && r.statusText !== chosen.statusText && r.kind !== "error").map((r) => r.status ? String(r.status) : r.statusText))];
+  const toHandler = all.some((r) => r.kind === "error");
+  if (!codes.length && !toHandler) return undefined;
+  const parts = [codes.length ? `it can also answer ${codes.slice(0, 4).join(", ")}` : "", toHandler ? "pass errors to the error handler" : ""].filter(Boolean);
+  return `On other branches ${parts.join(" or ")}.`;
+}
+
 function localSentence(e: TraceEdge, from: TraceNode, to: TraceNode, ev: SceneEvent): string {
   const at = fileLine(e);
+  if (e.props.checkout) {
+    const n = typeof to.props.poolMax === "number" ? to.props.poolMax : undefined;
+    return `${fnName(from)} borrows one connection from the pool${n ? ` (${n} at most)` : ""} and keeps it for the statements that follow. No SQL is sent: an idle connection is handed over, a new one is opened if the pool isn't full, and if all are busy it waits. A transaction only works if every statement runs on this one connection.`;
+  }
+  if (e.props.release) return `${fnName(from)} gives the connection back to the pool (it's in a finally block, so this happens whether the transaction committed or rolled back). Forgetting this would leak one of the pool's connections for good.`;
   if (to.kind === "middleware") {
     const lib = typeof to.props.library === "string" ? to.props.library : undefined;
     if (ev.to.stage?.startsWith("__library")) return `Library middleware runs before your code: ${lib && MIDDLEWARE[lib] ? `${lib} ${MIDDLEWARE[lib]}` : `${to.label} runs.`}`;
     if (lib && MIDDLEWARE[lib]) return `${lib} ${MIDDLEWARE[lib]}`;
-    if (/deserializeUser/.test(to.label)) return `Passport's deserializeUser (${at}) turns the user id stored in the session into a full user record for req.user.`;
+    if (to.props.library === "express-rate-limit") {
+      const limit = typeof to.props.max === "number" && typeof to.props.windowMs === "number" ? ` (${to.props.max} per ${formatMs(to.props.windowMs)})` : "";
+      return `The rate limiter ${fnName(to)}${limit} counts this request for the client's IP. Over the limit it answers 429 Too Many Requests and the handler never runs. One counter per IP is shared by every route that uses this limiter.`;
+    }
     return `Your middleware ${fnName(to)} runs (${fileLine(to)}). It either calls next() to pass the request on, or answers right away (for example with 401 or 403).`;
   }
+  if (/deserializeUser/.test(to.label)) return `Passport calls deserializeUser (${fileLine(to)}): it turns the user id stored in the session into the full user record, which becomes req.user.`;
+  if (/strategy verify callback/.test(to.label)) return `Passport runs the strategy's verify callback (${fileLine(to)}): it finds or creates the user and tells Passport whether the login succeeded.`;
   if (to.kind === "handler") {
     if (from.kind === "route" || from.kind === "middleware") return `Express runs the route's handler (${fileLine(to)}). This is where the work for this request happens.`;
     if (from.kind === "timer") return `The timer fires and ${fnName(to)} runs (${fileLine(to)}).`;
@@ -251,6 +317,13 @@ function networkSentence(model: Model, e: TraceEdge, from: TraceNode, to: TraceN
     const reuse = fromDev?.kind === "browser" || fromDev?.kind === "client" ? " It reuses an open keep-alive connection if one exists; otherwise it opens a new TCP (and TLS) connection first." : "";
     return `${who} sends ${what} over HTTP to ${deviceName(toDev)} ${waitText}.${reuse} Express matches it to the route registered at ${fileLine(to)}.`;
   }
+  if (typeof e.props.sessionStore === "string") {
+    return e.props.afterResponse
+      ? `As the response finishes, express-session writes the session back to ${to.label.replace(/\s*\(.*\)$/, "")}: the whole session if it changed (a login, a flash message), or just a new expiry time if it didn't. The response isn't complete until this write is.`
+      : `express-session reads the cookie and loads this visitor's session from ${to.label.replace(/\s*\(.*\)$/, "")} by its id. A first visit with no cookie skips this and starts an empty session in memory.`;
+  }
+  if (e.props.oauth === "token") return `Passport sends the authorization code from the callback URL to the provider's token endpoint and waits for an access token. This is a server-to-server HTTPS call; the browser never sees the token.`;
+  if (e.props.oauth === "profile") return `With that token, Passport asks the provider for the user's profile (id, name, email) and waits for it.`;
   if (to.kind === "database") {
     if (e.protocol === "sql") return `${fnName(from)} ${sqlSentence(e, to)} ${connectionSentence(e, to)}`.trim();
     return `${fnName(from)} sends a MongoDB command${e.label ? ` (${e.label})` : ""} ${waitText}. ${connectionSentence(e, to)}`.trim();
@@ -308,6 +381,7 @@ function connectionSentence(e: TraceEdge, db: TraceNode): string {
     const n = typeof db.props.poolMax === "number" ? db.props.poolMax : undefined;
     return `It borrows an already-open connection from the pool${n ? ` (${n} at most${db.props.poolMaxDefault ? ", the library default" : ""})` : ""}, so there's no handshake; if all are busy, it waits for one.`;
   }
+  if (e.lifecycle === "held") return "It runs on the connection this code checked out, the same one every statement of the transaction uses.";
   if (e.lifecycle === "persistent") return "It goes over a connection that stays open.";
   if (e.lifecycle === "new-per-request") return "It opens a brand-new connection for this (TCP handshake, authentication) and closes it afterwards.";
   return "";
@@ -364,3 +438,45 @@ export function typicalCost(model: Model, scene: Scene, ev: SceneEvent): string 
   }
   return undefined;
 }
+
+const formatMs = (ms: number) => (ms >= 3_600_000 && ms % 3_600_000 === 0 ? `${ms / 3_600_000} h` : ms >= 60_000 && ms % 60_000 === 0 ? `${ms / 60_000} min` : ms >= 1000 && ms % 1000 === 0 ? `${ms / 1000} s` : `${ms} ms`);
+
+// ------------------------------------------------------------------ facts
+
+/** Key facts for the details panel, in the spirit of Packet Tracer's PDU information. */
+export function eventFacts(model: Model, scene: Scene, ev: SceneEvent): { label: string; value: string; mono?: boolean }[] {
+  const e = ev.edge;
+  const to = model.nodes.get(e.to)!;
+  const out: { label: string; value: string; mono?: boolean }[] = [];
+  const add = (label: string, value: string | undefined, mono = false) => value && out.push({ label, value, mono });
+  if (ev.kind === "response") {
+    const r = chosenResponse(model, scene, ev);
+    add("Status", r ? (r.status ? `${r.status} ${STATUS_TEXT[r.status] ?? ""}`.trim() : r.statusText) : undefined);
+    add("Body", r?.body, true);
+    return out;
+  }
+  if (ev.kind === "local") {
+    add("Where", `inside ${deviceName(scene.devices.find((d) => d.id === ev.from.device))}`);
+    add("Cost", typicalCost(model, scene, ev));
+    add("Only if", conditionNote(e)?.replace(/^Only runs when /, "").replace(/\.$/, ""));
+    return out;
+  }
+  const proto = e.props.scheme === "https" ? "HTTPS" : e.protocol === "http" && e.props.scheme === "http" ? "HTTP (unencrypted)" : PROTOCOL_NAMES[e.protocol] ?? e.protocol;
+  add("Protocol", proto);
+  if (ev.kind === "request" || ev.kind === "send") {
+    add("In the packet", typeof e.props.sql === "string" ? String(e.props.sql) : e.label, true);
+    add("Connection", LIFECYCLE_NAMES[e.lifecycle]);
+    add("Caller", ev.kind === "request" ? (to.kind === "topic" || to.kind === "queue" ? "waits for the broker to accept it, not for whoever handles it" : "waits for the answer") : "doesn't wait");
+    add("Only if", conditionNote(e)?.replace(/^Only runs when /, "").replace(/\.$/, ""));
+    add("Typical time", typicalCost(model, scene, ev));
+  } else {
+    add("Coming back", ev.kind === "ack" ? "how many subscribers received it" : replyTitle(e, to));
+  }
+  return out;
+}
+
+const PROTOCOL_NAMES: Record<string, string> = { http: "HTTP", ws: "WebSocket", sse: "Server-Sent Events", sql: "SQL (Postgres wire protocol)", mongodb: "MongoDB wire protocol", redis: "Redis protocol (RESP)", smtp: "SMTP", amqp: "AMQP", unknown: "unknown" };
+const LIFECYCLE_NAMES: Record<string, string> = {
+  pooled: "borrowed from a pool, returned after", held: "the connection this code checked out (a transaction)", "keep-alive": "the client's keep-alive connection, or a new one",
+  persistent: "one long-lived connection", "new-per-request": "a brand-new connection, closed after", none: "none", unknown: "unknown",
+};

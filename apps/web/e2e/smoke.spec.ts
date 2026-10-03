@@ -5,19 +5,57 @@ test("home lists the gallery", async ({ page }) => {
   await expect(page.getByTestId("gallery-card")).toHaveCount(4);
 });
 
-test("a flow plays hop by hop with code evidence", async ({ page }) => {
+test("a flow plays device to device with code evidence", async ({ page }) => {
   await page.goto("/#/repo/job-scheduler?tab=flows");
   await page.getByTestId("flow-item").filter({ hasText: "On \"job:events\" message" }).click();
   await expect(page.getByTestId("flow-title")).toHaveText("On \"job:events\" message");
-  await page.getByTestId("play").click(); // pause autoplay
-  const progress = page.locator(".progress");
-  for (let i = 0; i < 2; i++) await page.getByTestId("next").click();
-  await expect(progress).toHaveText(/^3 \/ \d+$/);
-  // Third item: the subscriber's broadcast pushes over every open WebSocket.
-  await expect(page.getByTestId("caption")).toContainText("pushes a message");
+  // The devices this flow crosses: Redis channel -> api process -> browser -> api -> Postgres.
+  const devices = page.getByTestId("device");
+  for (const name of ["Channel \"job:events\"", "api", "Browser", "Postgres"]) await expect(devices.filter({ hasText: name }).first()).toBeVisible();
+  // Third event: the subscriber's broadcast writes into every open WebSocket.
+  await page.getByTestId("event-list").locator("tr[data-index='2']").click();
+  await expect(page.locator(".progress")).toHaveText(/^3 \/ \d+$/);
+  await expect(page.getByTestId("caption")).toContainText("writes the message into each open WebSocket");
   const inspector = page.getByTestId("inspector");
+  await expect(inspector).toContainText("Step 3 of");
   await expect(inspector.locator(".code-line.hl")).toContainText("ws.send(raw)");
   await expect(inspector).toContainText("api/ws/broadcast.js");
+});
+
+test("playback is paced for reading, not racing", async ({ page }) => {
+  await page.goto("/#/repo/job-scheduler?tab=flows&flow=flow%3Aroute%3APOST%3A%2Fjobs");
+  const progress = page.locator(".progress");
+  await expect(progress).toHaveText(/^1 \//);
+  await page.getByTestId("play").click();
+  // The first step travels, then stays up long enough to read its caption.
+  await page.waitForTimeout(1500);
+  await expect(progress).toHaveText(/^1 \//);
+  await expect(progress).toHaveText(/^2 \//, { timeout: 7_000 });
+  await page.getByTestId("play").click(); // pause
+  const at = await progress.textContent();
+  await page.waitForTimeout(2500);
+  await expect(progress).toHaveText(at!);
+});
+
+test("branches: an if/else plays one side at a time", async ({ page }) => {
+  await page.goto("/#/repo/job-scheduler?tab=flows&flow=flow%3Aroute%3AGET%3A%2Fjobs");
+  const list = page.getByTestId("event-list");
+  await expect(list).toContainText("SELECT jobs by status");
+  await expect(list).not.toContainText("SELECT jobs, page");
+  await page.getByTestId("branches").click();
+  await page.locator(".branch-row").filter({ hasText: "status" }).getByRole("button", { name: /^false/ }).click();
+  await expect(list).toContainText("SELECT jobs, page");
+  await expect(list).not.toContainText("SELECT jobs by status");
+});
+
+test("the timeline view is still one click away", async ({ page }) => {
+  await page.goto("/#/repo/job-scheduler?tab=flows&flow=flow%3Aroute%3APOST%3A%2Fjobs");
+  await page.getByTestId("view-timeline").click();
+  await expect(page.getByTestId("diagram")).toBeVisible();
+  // No "gets the result back" through middleware: the handler answers the client directly.
+  await expect(page.locator(".arrow-line")).not.toHaveCount(0);
+  await page.getByTestId("view-devices").click();
+  await expect(page.getByTestId("topology")).toBeVisible();
 });
 
 test("findings link back into the flow", async ({ page }) => {
@@ -90,8 +128,8 @@ test("the overview explains the repo and runs the guided tour", async ({ page })
 test("the open-source gallery repo loads", async ({ page }) => {
   await page.goto("/#/repo/hackathon-starter?tab=flows&flow=flow%3Aroute%3APOST%3A%2Fsignup");
   await expect(page.getByTestId("flow-title")).toHaveText("POST /signup");
-  // The app's MongoDB (Mongoose) and connect-mongo's separate session store.
-  await expect(page.locator(".lifeline-head").filter({ hasText: "MongoDB" })).toHaveCount(2);
+  // The app's MongoDB (Mongoose) and connect-mongo's separate session store are two boxes.
+  await expect(page.getByTestId("device").filter({ hasText: "MongoDB" })).toHaveCount(2);
 });
 
 test("scale mode finds the bottleneck and a what-if relieves it", async ({ page }) => {
