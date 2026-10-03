@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { Node, SyntaxKind, type CallExpression, type NewExpression, type SourceFile } from "ts-morph";
 import { validateTraceSpec, type TraceSpec } from "@vibesim/spec";
+import { runFindings } from "@vibesim/findings";
 import { loadRepo, relPath, isInlineScript, type Repo } from "./project.ts";
 import { Resolver, isFunctionLike, pick, type FunctionLike, type Handle, type Value } from "./values.ts";
 import { hooks, classifyOp, stringValue, numericValue, type Op, type Target } from "./libraries.ts";
@@ -9,6 +10,7 @@ import { callSites, forwardedCall, functionKeyName, functionName, moduleLabel, e
 import { extractExpressRoutes, type Route, type ChainElement } from "./express.ts";
 import { readInfra, type Infra } from "./infra.ts";
 import { extractNextRoutes, isNextApp } from "./nextjs.ts";
+import { redundantIndexes } from "./sqlschema.ts";
 import { shortHash, truncate } from "./util.ts";
 
 export const GENERATOR_VERSION = "0.1.0";
@@ -146,7 +148,10 @@ class Analyzer {
       id, kind,
       label: label && (forceLabel || !name) ? label : `${moduleLabel(fn.getSourceFile())}.${name ?? `anonymous@${fn.getStartLineNumber()}`}`,
       evidence: [this.ev(fn)],
-      props: { file: relPath(this.repo, fn.getSourceFile()), name: name ?? null, line: fn.getStartLineNumber() },
+      props: {
+        file: relPath(this.repo, fn.getSourceFile()), name: name ?? null, line: fn.getStartLineNumber(),
+        ...(this.clientFiles.has(fn.getSourceFile()) ? { browser: true } : moduleStateProps(this.r, fn)),
+      },
     });
   }
 
@@ -204,15 +209,30 @@ class Analyzer {
         this.resourceIds.set(h, id);
         if (shared.includes(h)) for (const other of shared) this.resourceIds.set(other, id);
         const poolMax = h.data.poolMax as number | undefined;
+        const tables = (engine === "postgres" || engine === "mysql") && h.type !== "prisma" ? this.tablesProp() : undefined;
         const lib = h.lib;
         this.nodes.set(id, {
           id, kind: isCache ? "cache" : "database", evidence: [ev], confidence: "verified",
           label: isCache ? `Redis (${lib === "redis" ? "node-redis" : lib})` : `${engineLabel(engine)} (${lib === "@prisma/client" ? "Prisma" : lib}${poolMax ? `, pool max ${poolMax}` : ""})`,
           concepts: h.type === "pg-pool" || h.type === "prisma" ? ["connection-pooling"] : [],
-          props: { engine, library: lib, ...(poolMax ? { poolMax, poolMaxDefault: h.data.poolMaxDefault } : {}) },
+          props: { engine, library: lib, ...(poolMax ? { poolMax, poolMaxDefault: h.data.poolMaxDefault } : {}), ...(tables ? { tables } : {}) },
         });
       }
     }
+  }
+
+  /** Tables, keys and indexes read from .sql files, for the database node's inspector. */
+  private tablesProp(): Record<string, unknown> | undefined {
+    if (!this.repo.sqlSchema.size) return undefined;
+    const out: Record<string, unknown> = {};
+    for (const [name, t] of this.repo.sqlSchema) {
+      out[name] = {
+        columns: t.columns, file: t.file, line: t.line,
+        indexes: t.indexes.map((i) => ({ name: i.name, columns: i.columns, unique: i.unique, source: i.source, file: i.file, line: i.line })),
+        redundant: redundantIndexes(t).map((x) => ({ index: x.index.name, coveredBy: x.coveredBy.name, file: x.index.file, line: x.index.line })),
+      };
+    }
+    return out;
   }
 
   // ---------------------------------------------------------------- edges
@@ -637,6 +657,16 @@ class Analyzer {
         if (h?.type === "browser-ws" && fn) this.addDeliver(h, fn, n);
       });
     }
+    // socket.io with an adapter (Redis, Postgres) fans out across instances.
+    for (const call of this.r.calls()) {
+      if (!Node.isCallExpression(call)) continue;
+      const callee = this.r.value(call.getExpression());
+      if (callee.kind === "member" && callee.handle.type === "sio-server" && callee.path.join(".") === "adapter") {
+        const id = this.wsIds.get(callee.handle.root);
+        const node = id ? this.nodes.get(id) : undefined;
+        if (node) node.props.backplane = true;
+      }
+    }
     for (const h of this.r.allHandles()) {
       if (h.type !== "browser-ws") continue;
       const id = this.matchWs(h.data.url as string | undefined);
@@ -905,8 +935,11 @@ class Analyzer {
       findings: [],
       gaps: this.gaps,
     };
-    const result = validateTraceSpec(spec);
-    if (!result.ok) throw new Error(`extractor produced an invalid spec:\n${result.issues.slice(0, 20).join("\n")}`);
+    const first = validateTraceSpec(spec);
+    if (!first.ok) throw new Error(`extractor produced an invalid spec:\n${first.issues.slice(0, 20).join("\n")}`);
+    const findings = runFindings(first.spec);
+    const result = validateTraceSpec({ ...first.spec, meta: { ...first.spec.meta, stats: { ...first.spec.meta.stats, findings: findings.length } }, findings });
+    if (!result.ok) throw new Error(`findings produced an invalid spec:\n${result.issues.slice(0, 20).join("\n")}`);
     return result.spec;
   }
 }
@@ -941,6 +974,50 @@ function isDynamicCallee(r: Resolver, callee: Node): boolean {
   return false;
 }
 
+/** Module-level Maps, Sets, arrays, objects or `let` counters this function mutates. */
+function moduleStateProps(r: Resolver, fn: FunctionLike): Record<string, unknown> {
+  const body = fn.getBody();
+  if (!body) return {};
+  const names = new Set<string>();
+  const moduleLevel = (id: Node): string | undefined => {
+    if (!Node.isIdentifier(id)) return undefined;
+    const d = r.declarationOf(id);
+    if (!d || !Node.isVariableDeclaration(d)) return undefined;
+    const stmt = d.getParent()?.getParent();
+    if (!stmt || !Node.isVariableStatement(stmt) || !Node.isSourceFile(stmt.getParent())) return undefined;
+    const init = d.getInitializer();
+    const mutableInit = !init || Node.isNewExpression(init) && /^(Map|Set|WeakMap|Array)$/.test(init.getExpression().getText())
+      || Node.isArrayLiteralExpression(init) || Node.isObjectLiteralExpression(init) || Node.isNumericLiteral(init);
+    if (!mutableInit) return undefined;
+    // Collections of live sockets are per-process by nature.
+    if (Node.isNewExpression(init ?? id) || Node.isArrayLiteralExpression(init ?? id)) {
+      const el = r.elementOf({ kind: "collection", decl: d });
+      if (el.kind === "handle" && /socket|ws/.test(el.handle.type)) return undefined;
+    }
+    return d.getName();
+  };
+  body.forEachDescendant((n) => {
+    if (Node.isCallExpression(n)) {
+      const callee = n.getExpression();
+      if (Node.isPropertyAccessExpression(callee) && /^(set|add|push|delete|clear|unshift|splice|pop|shift)$/.test(callee.getName())) {
+        const name = moduleLevel(callee.getExpression());
+        if (name) names.add(name);
+      }
+    } else if (Node.isBinaryExpression(n) && /^(=|\+=|-=)$/.test(n.getOperatorToken().getText())) {
+      const left = n.getLeft();
+      const target = Node.isPropertyAccessExpression(left) || Node.isElementAccessExpression(left) ? left.getExpression() : left;
+      const name = moduleLevel(target);
+      // `client = createClient()` caches a connection; that is not request state.
+      const isHandle = r.value(n.getRight()).kind === "handle";
+      if (name && !isHandle && (target !== left || r.declarationOf(target)?.getParent()?.getText().startsWith("let"))) names.add(name);
+    } else if (Node.isPostfixUnaryExpression(n) || Node.isPrefixUnaryExpression(n)) {
+      const name = moduleLevel(n.getOperand());
+      if (name) names.add(name);
+    }
+  });
+  return names.size ? { mutatesModuleState: [...names] } : {};
+}
+
 /** Index of `owner`'s own parameter that `callee` names, or -1. */
 function ownParamIndex(r: Resolver, owner: FunctionLike, callee: Node): number {
   if (!Node.isIdentifier(callee)) return -1;
@@ -963,6 +1040,7 @@ function isServerAction(fn: FunctionLike): boolean {
 function siteProps(site: CallSite): Record<string, unknown> {
   const p: Record<string, unknown> = {};
   if (site.inLoop) p.inLoop = true;
+  if (site.inLoop && site.loopExits) p.loopExitsEarly = true;
   if (site.parallel) p.parallel = true;
   if (site.errorPath) p.errorPath = true;
   if (site.conditional) p.conditional = true;

@@ -9,6 +9,9 @@ export interface SqlSummary {
   aggregate: boolean;
   /** WHERE id = $n style lookup: returns at most one row. */
   singleRow: boolean;
+  /** Columns compared for equality in WHERE (`col = $1`, `col IN (...)`, `col = ANY($1)`). */
+  whereColumns: string[];
+  hasJoin: boolean;
 }
 
 /** Cheap, deterministic summary of a SQL string for labels and findings. */
@@ -29,7 +32,10 @@ export function summarizeSql(raw: string): SqlSummary {
   const aggregate = op === "SELECT" && /\b(COUNT|SUM|AVG|MIN|MAX)\s*\(/.test(upper) && !/\bGROUP\s+BY\b[\s\S]*\bHAVING\b/.test(upper);
   const singleRow = /\bWHERE\b[^;]*?\b(\w+\.)?id\s*=\s*(\$\d+|\?|:\w+)/i.test(text) || /^SELECT\s+1\b/i.test(text);
   const label = table ? `${op} ${table}` : op === "OTHER" ? truncate(text, 40) : op;
-  return { op, table, label, text: truncate(text, 400), hasLimit, aggregate, singleRow };
+  const whereClause = /\bWHERE\b([\s\S]*?)(?:\bORDER\s+BY\b|\bGROUP\s+BY\b|\bLIMIT\b|\bOFFSET\b|\bRETURNING\b|\bFOR\s+UPDATE\b|$)/i.exec(text)?.[1] ?? "";
+  const whereColumns = [...new Set([...whereClause.matchAll(/(?:\b\w+\.)?(\w+)\s*(?:=\s*(?:\$\d+|\?|:\w+|'[^']*'|\d+|ANY\s*\()|\s+IN\s*\()/gi)].map((m) => m[1]!.toLowerCase()))];
+  const hasJoin = /\bJOIN\b/i.test(text);
+  return { op, table: table?.toLowerCase(), label, text: truncate(text, 400), hasLimit, aggregate, singleRow, whereColumns, hasJoin };
 }
 
 function match(text: string, re: RegExp): string | undefined {

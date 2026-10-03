@@ -493,6 +493,10 @@
             "type": "string",
             "minLength": 1
           },
+          "fix": {
+            "type": "string",
+            "minLength": 1
+          },
           "concept": {
             "type": "string",
             "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
@@ -537,6 +541,14 @@
               ],
               "additionalProperties": false
             }
+          },
+          "data": {
+            "default": {},
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
           }
         },
         "required": [

@@ -2,6 +2,7 @@ import { Node, type CallExpression, type NewExpression } from "ts-morph";
 import type { Handle, HandleType, LibraryHooks, Resolver, Value } from "./values.ts";
 import { isFunctionLike, pick, UNKNOWN } from "./values.ts";
 import { summarizeSql } from "./sql.ts";
+import { checkQuery } from "./sqlschema.ts";
 
 type Protocol = "in-process" | "http" | "ws" | "sse" | "sql" | "mongodb" | "redis" | "amqp" | "smtp" | "unknown";
 type Lifecycle = "none" | "new-per-request" | "pooled" | "persistent" | "unknown";
@@ -97,7 +98,7 @@ const CREATORS: Creator[] = [
   { pkg: "mongoose", path: "model", type: "mongoose-model", data: (r, call) => ({ model: stringArg(r, call, 0), schema: call.getArguments()[1] }) },
   { pkg: "bullmq", path: "Queue", type: "bull-queue", isNew: true, data: (r, call) => ({ name: stringArg(r, call, 0) ?? "queue" }) },
   { pkg: "bull", path: "", type: "bull-queue", data: (r, call) => ({ name: stringArg(r, call, 0) ?? "queue" }) },
-  { pkg: "axios", path: "create", type: "http-client", data: (r, call) => ({ baseURL: stringOption(r, call, "baseURL") ?? "" }) },
+  { pkg: "axios", path: "create", type: "http-client", data: (r, call) => ({ baseURL: stringOption(r, call, "baseURL") ?? "", timeout: numberOption(r, call, "timeout") }) },
   { pkg: "@supabase/supabase-js", path: "createClient", type: "supabase" },
   { pkg: "drizzle-orm", path: "drizzle", type: "drizzle" },
   { pkg: "@supabase/ssr", path: "createServerClient", type: "supabase" },
@@ -385,19 +386,29 @@ export function classifyOp(r: Resolver, call: CallExpression | NewExpression, la
       }
       return undefined;
     case "prisma": {
-      if (path.length === 2 && !path[0]!.startsWith("$")) return dbOp(h, "pooled", `${method} ${path[0]}`, "sql");
+      if (path.length === 2 && !path[0]!.startsWith("$")) {
+        const op = dbOp(h, "pooled", `${method} ${path[0]}`, "sql");
+        if (method === "findMany") op.props = { statement: "SELECT", unbounded: !objectHasProp(r, args[0], "take"), scoped: objectHasProp(r, args[0], "where") };
+        return op;
+      }
       if (path.length === 1 && path[0]!.startsWith("$") && /query|execute|transaction/i.test(path[0]!)) return dbOp(h, "pooled", path[0]!, "sql");
       return undefined;
     }
     case "mongoose-model":
-      if (path.length === 1) return dbOp(h, "pooled", `${method} ${String(h.data.model ?? "")}`.trim(), "mongodb");
+      if (path.length === 1) {
+        const op = dbOp(h, "pooled", `${method} ${String(h.data.model ?? "")}`.trim(), "mongodb");
+        if (method === "find") op.props = { statement: "SELECT", unbounded: !chainCall(call, "limit"), scoped: !!args[0] && !isEmptyObject(args[0]) };
+        return op;
+      }
       return undefined;
     case "drizzle": {
       const verb = path[0]!;
       const lc: Lifecycle = "pooled";
       if (path.length === 1 && (verb === "select" || verb === "selectDistinct")) {
         const from = chainCall(call, "from");
-        return dbOp(h, lc, `select ${from?.getArguments()[0]?.getText() ?? ""}`.trim());
+        const op = dbOp(h, lc, `select ${from?.getArguments()[0]?.getText() ?? ""}`.trim());
+        op.props = { statement: "SELECT", unbounded: !chainCall(call, "limit"), scoped: !!chainCall(call, "where") };
+        return op;
       }
       if (path.length === 1 && (verb === "insert" || verb === "update" || verb === "delete")) {
         return dbOp(h, lc, `${verb} ${call.getArguments()[0]?.getText() ?? ""}`.trim());
@@ -419,21 +430,31 @@ export function classifyOp(r: Resolver, call: CallExpression | NewExpression, la
       }
       return undefined;
     case "http-client":
-      if (HTTP_METHODS.has(method) || method === "request") return urlOp(r, call, args, method === "request" ? "GET" : method.toUpperCase(), String(h.data.baseURL ?? ""));
+      if (HTTP_METHODS.has(method) || method === "request") {
+        const op = urlOp(r, call, args, method === "request" ? "GET" : method.toUpperCase(), String(h.data.baseURL ?? ""));
+        if (h.data.timeout !== undefined) op.props.timeout = true;
+        return op;
+      }
       return undefined;
     case "sdk-client": {
       if (path.length === 0 || method === "on" || (h.data.service === "Stripe API" && path[0] === "webhooks")) return undefined;
       const protocol = (h.data.protocol as Protocol) ?? "http";
       return {
         target: { type: "external", service: String(h.data.service), host: String(h.data.host) }, protocol, lifecycle: "pooled", mode: "sync",
-        label: path.join("."), props: {},
+        label: path.join("."), props: { timeout: "sdk-default" },
       };
     }
     case "supabase": {
       if (path.length === 1 && method === "from") {
         const table = stringArg(r, call, 0) ?? "table";
-        const verb = chainMethods(call).find((m) => SUPABASE_DB_METHODS.includes(m)) ?? "query";
-        return { target: { type: "external", service: "Supabase (Postgres over REST)", host: "supabase.co" }, protocol: "http", lifecycle: "pooled", mode: "sync", label: `${verb} ${table}`, props: { table } };
+        const chain = chainMethods(call);
+        const verb = chain.find((m) => SUPABASE_DB_METHODS.includes(m)) ?? "query";
+        const bounded = chain.some((m) => ["limit", "range", "single", "maybeSingle"].includes(m));
+        const scoped = chain.some((m) => ["eq", "in", "match", "filter", "neq", "gt", "lt", "gte", "lte", "is"].includes(m));
+        return {
+          target: { type: "external", service: "Supabase (Postgres over REST)", host: "supabase.co" }, protocol: "http", lifecycle: "pooled", mode: "sync", label: `${verb} ${table}`,
+          props: { table, timeout: "sdk-default", ...(verb === "select" ? { statement: "SELECT", unbounded: !bounded, scoped } : {}) },
+        };
       }
       if (path.length === 1 && method === "rpc") {
         return { target: { type: "external", service: "Supabase (Postgres over REST)", host: "supabase.co" }, protocol: "http", lifecycle: "pooled", mode: "sync", label: `rpc ${stringArg(r, call, 0) ?? ""}`.trim(), props: {} };
@@ -461,9 +482,19 @@ function dbOp(h: Handle, lifecycle: Lifecycle, label: string, protocol: Protocol
 function sqlOp(r: Resolver, h: Handle, args: Node[], lifecycle: Lifecycle): Op {
   const text = stringValue(r.value(args[0]));
   const sql = text ? summarizeSql(text) : undefined;
+  if (!sql) return { ...dbOp(h, lifecycle, "query"), props: {} };
+  // Check the WHERE clause against the repo's own schema when the table is known.
+  const table = sql.table ? r.repo.sqlSchema.get(sql.table) : undefined;
+  const facts = table && !sql.hasJoin && (sql.op === "SELECT" || sql.op === "UPDATE" || sql.op === "DELETE") ? checkQuery(table, sql.whereColumns) : undefined;
+  const singleRow = sql.singleRow || !!facts?.uniqueLookup;
   return {
-    ...dbOp(h, lifecycle, sql?.label ?? "query"),
-    props: sql ? { sql: sql.text, statement: sql.op, table: sql.table, hasLimit: sql.hasLimit, aggregate: sql.aggregate, singleRow: sql.singleRow } : {},
+    ...dbOp(h, lifecycle, sql.label),
+    props: {
+      sql: sql.text, statement: sql.op, table: sql.table, hasLimit: sql.hasLimit, aggregate: sql.aggregate, singleRow,
+      ...(sql.op === "SELECT" ? { unbounded: !sql.hasLimit && !sql.aggregate && !singleRow, scoped: /\bWHERE\b/i.test(sql.text) } : {}),
+      ...(facts ? { schemaChecked: true } : {}),
+      ...(facts?.unindexed.length ? { missingIndex: facts.unindexed } : {}),
+    },
   };
 }
 
@@ -598,6 +629,17 @@ export function numericValue(r: Resolver, node: Node): number | undefined {
   }
   if (Node.isParenthesizedExpression(node)) return numericValue(r, node.getExpression());
   return undefined;
+}
+
+function objectHasProp(r: Resolver, node: Node | undefined, name: string): boolean {
+  if (!node) return false;
+  const v = r.value(node);
+  if (v.kind !== "object") return false;
+  return ((v.node as any).getProperties() as Node[]).some((p) => (Node.isPropertyAssignment(p) || Node.isShorthandPropertyAssignment(p)) && p.getName() === name);
+}
+
+function isEmptyObject(node: Node): boolean {
+  return Node.isObjectLiteralExpression(node) && node.getProperties().length === 0;
 }
 
 function insideFunction(node: Node): boolean {

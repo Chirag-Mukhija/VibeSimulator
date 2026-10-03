@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
 import path from "node:path";
 import { Project, ts, type SourceFile } from "ts-morph";
 import { toPosix } from "./util.ts";
+import { parseSqlSchema, type SqlSchema } from "./sqlschema.ts";
 
 const CODE_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts"]);
 const SKIP_DIRS = new Set([
@@ -25,6 +26,8 @@ export interface Repo {
   tsPaths: { baseUrl: string; paths: Record<string, string[]> } | undefined;
   /** Lines of each file, for evidence snippets. Keyed by repo-relative path. */
   lines: Map<string, string[]>;
+  /** Tables, keys and indexes from the repo's .sql files. */
+  sqlSchema: SqlSchema;
 }
 
 export function loadRepo(root: string): Repo {
@@ -32,7 +35,8 @@ export function loadRepo(root: string): Repo {
   const codeFiles: string[] = [];
   const htmlFiles: string[] = [];
   const configFiles: string[] = [];
-  walk(abs, abs, codeFiles, htmlFiles, configFiles);
+  const sqlFiles: string[] = [];
+  walk(abs, abs, codeFiles, htmlFiles, configFiles, sqlFiles);
 
   const tsPaths = readTsPaths(abs);
   const project = new Project({
@@ -72,7 +76,8 @@ export function loadRepo(root: string): Repo {
   const byPath = new Map(files.map((f) => [f.getFilePath(), f]));
   const pkgPath = path.join(abs, "package.json");
   const packageJson = existsSync(pkgPath) ? safeJson(readFileSync(pkgPath, "utf8")) : undefined;
-  return { root: abs, project, files, byPath, packageJson, configFiles, tsPaths, lines };
+  const sqlSchema = parseSqlSchema(sqlFiles.map((f) => ({ file: toPosix(path.relative(abs, f)), text: readFileSync(f, "utf8") })));
+  return { root: abs, project, files, byPath, packageJson, configFiles, tsPaths, lines, sqlSchema };
 }
 
 /** Repo-relative POSIX path of a source file, mapping inline-script files back to their HTML. */
@@ -86,7 +91,7 @@ export function isInlineScript(file: SourceFile): boolean {
   return file.getFilePath().endsWith(INLINE_SCRIPT_SUFFIX);
 }
 
-function walk(dir: string, root: string, code: string[], html: string[], config: string[]) {
+function walk(dir: string, root: string, code: string[], html: string[], config: string[], sql: string[]) {
   let entries: string[];
   try {
     entries = readdirSync(dir);
@@ -103,13 +108,14 @@ function walk(dir: string, root: string, code: string[], html: string[], config:
       continue;
     }
     if (st.isDirectory()) {
-      if (!name.startsWith(".")) walk(full, root, code, html, config);
+      if (!name.startsWith(".")) walk(full, root, code, html, config, sql);
       continue;
     }
     if (st.size > 1_000_000) continue;
     const ext = path.extname(name).toLowerCase();
     if (CODE_EXTENSIONS.has(ext) && !SKIP_FILE.test(name)) code.push(full);
     else if (ext === ".html" || ext === ".htm") html.push(full);
+    else if (ext === ".sql") sql.push(full);
     else if (/^(docker-compose|compose)\.ya?ml$|^Dockerfile|\.conf$|^nginx/i.test(name)) {
       config.push(toPosix(path.relative(root, full)));
     }

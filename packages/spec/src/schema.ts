@@ -203,10 +203,14 @@ export const Finding = z.strictObject({
   title: z.string().min(1),
   /** What goes wrong as load grows, in plain language. */
   consequence: z.string().min(1),
+  /** What to do about it. Shown only when the reader asks. */
+  fix: z.string().min(1).optional(),
   concept: Slug.optional(),
   /** Node or edge ids this finding is about. */
   refs: z.array(Id).default([]),
   evidence: z.array(Evidence).min(1),
+  /** Numbers behind the consequence, for the viewer and the simulator. */
+  data: z.record(z.string(), z.unknown()).default({}),
 });
 
 /** Something the parser could not resolve. The only input the optional LLM tier ever sees. */

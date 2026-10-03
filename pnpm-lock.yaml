@@ -29,6 +29,9 @@ importers:
 
   packages/extractor:
     dependencies:
+      '@vibesim/findings':
+        specifier: workspace:*
+        version: link:../findings
       '@vibesim/spec':
         specifier: workspace:*
         version: link:../spec
@@ -38,6 +41,12 @@ importers:
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
+
+  packages/findings:
+    dependencies:
+      '@vibesim/spec':
+        specifier: workspace:*
+        version: link:../spec
 
   packages/spec:
     dependencies:

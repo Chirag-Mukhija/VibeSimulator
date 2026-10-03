@@ -47,6 +47,8 @@ export function moduleLabel(file: SourceFile): string {
 export interface CallSite {
   call: CallExpression | NewExpression;
   inLoop: boolean;
+  /** The enclosing loop can return/break early (it usually stops after the first hit). */
+  loopExits: boolean;
   parallel: boolean;
   errorPath: boolean;
   conditional: boolean;
@@ -57,6 +59,7 @@ const INLINE_CALLBACK_METHODS = new Set([...ITERATION_METHODS, "then", "catch", 
 
 interface Ctx {
   inLoop: boolean;
+  loopExits: boolean;
   parallel: boolean;
   errorPath: boolean;
   conditional: boolean;
@@ -81,7 +84,7 @@ export function callSites(owner: Node): CallSite[] {
     let next = ctx;
     if (Node.isForStatement(node) || Node.isForOfStatement(node) || Node.isForInStatement(node)
       || Node.isWhileStatement(node) || Node.isDoStatement(node)) {
-      next = { ...ctx, inLoop: true };
+      next = { ...ctx, inLoop: true, loopExits: ctx.loopExits || loopReturns(node) };
     } else if (Node.isCatchClause(node)) {
       next = { ...ctx, errorPath: true };
     } else if (Node.isIfStatement(node) || Node.isConditionalExpression(node) || Node.isSwitchStatement(node)) {
@@ -102,13 +105,28 @@ export function callSites(owner: Node): CallSite[] {
   if (Node.isSourceFile(body)) {
     for (const st of body.getStatements()) {
       if (Node.isFunctionDeclaration(st) || Node.isClassDeclaration(st)) continue;
-      visit(st, { inLoop: false, parallel: false, errorPath: false, conditional: false });
+      visit(st, { inLoop: false, loopExits: false, parallel: false, errorPath: false, conditional: false });
     }
   } else {
-    visit(body, { inLoop: false, parallel: false, errorPath: false, conditional: false });
+    visit(body, { inLoop: false, loopExits: false, parallel: false, errorPath: false, conditional: false });
   }
   // Source order, inner calls before the outer call that starts at the same position.
   return out.sort((a, b) => a.call.getStart() - b.call.getStart() || a.call.getEnd() - b.call.getEnd());
+}
+
+function loopReturns(loop: Node): boolean {
+  let found = false;
+  loop.forEachDescendant((n, t) => {
+    if (isFunctionLike(n)) {
+      t.skip();
+      return;
+    }
+    if (Node.isReturnStatement(n)) {
+      found = true;
+      t.stop();
+    }
+  });
+  return found;
 }
 
 function runsInline(fn: Node): boolean {
