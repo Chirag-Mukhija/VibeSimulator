@@ -174,7 +174,7 @@ button.chip:hover { border-color: var(--accent); color: var(--text); }
 .topbar {
   height: var(--topbar); display: flex; align-items: center; gap: 16px;
   padding: 0 16px; border-bottom: 1px solid var(--border); background: var(--bg-elev);
-  position: sticky; top: 0; z-index: 20;
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20;
 }
 .brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 15px; color: var(--text); }
 .brand:hover { text-decoration: none; }
@@ -199,7 +199,7 @@ button.chip:hover { border-color: var(--accent); color: var(--text); }
 .panel { overflow: auto; min-height: 0; }
 .sidebar { border-right: 1px solid var(--border); background: var(--bg-elev); display: flex; flex-direction: column; }
 .inspector { border-left: 1px solid var(--border); background: var(--bg-elev); }
-.stage { display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+.stage { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
 
 .sidebar-head { padding: 12px; border-bottom: 1px solid var(--border); display: grid; gap: 8px; }
 .flow-groups { overflow: auto; padding: 6px 0 24px; }
@@ -327,7 +327,7 @@ a.card:hover { border-color: var(--accent); text-decoration: none; transform: tr
 
 /* --------------------------------------------------------------------- map */
 
-.map-wrap { flex: 1; overflow: auto; }
+.map-wrap { flex: 1; overflow: auto; min-height: 0; }
 
 /* ----------------------------------------------------------------- mobile */
 
@@ -362,9 +362,11 @@ a.card:hover { border-color: var(--accent); text-decoration: none; transform: tr
 [hidden] { display: none !important; }
 @media (max-width: 560px) {
   .brand > span:last-child { display: none; }
-  .tab { padding: 5px 8px; }
+  .tab { padding: 5px 8px; font-size: 13px; flex-shrink: 0; }
   .topbar { gap: 6px; }
-  .tabs { min-width: 0; }
+  /* Five tabs don't fit a phone: the strip scrolls sideways instead of pushing the icons off. */
+  .tabs { min-width: 0; flex-shrink: 1; overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
 }
 
 /* ------------------------------------------------------------------- learn */
@@ -425,3 +427,19 @@ ul.plain { margin: 0; padding-left: 18px; display: grid; gap: 6px; color: var(--
 .tour-n { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--accent-soft); color: var(--accent-text); display: grid; place-items: center; font-size: 12px; font-weight: 600; }
 .tour-bar { display: flex; align-items: center; gap: 8px; padding: 8px 18px; border-top: 1px solid var(--border); background: var(--bg-elev); flex-wrap: wrap; }
 @media (max-width: 900px) { .overview-grid { grid-template-columns: minmax(0, 1fr); } .overview { padding: 18px 16px 50px; } }
+
+/* ------------------------------------------------------------------ scale */
+
+.scale { padding: 20px 24px 60px; display: grid; gap: 16px; max-width: 1100px; }
+.scale-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; align-items: start; }
+.scale .card { gap: 12px; }
+.scale .card h3 { font-size: 15px; }
+.compare { display: grid; gap: 16px; }
+.compare.two { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.bar-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "label value" "bar bar"; gap: 4px 10px; align-items: center; font-size: 12.5px; }
+.bar-row > span:first-child { grid-area: label; min-width: 0; }
+.bar-row > .bar { grid-area: bar; }
+.bar-row .mono { grid-area: value; text-align: right; color: var(--text-dim); font-size: 11.5px; }
+.bar { height: 12px; background: var(--bg-elev-2); border-radius: 4px; overflow: hidden; }
+.bar > div { height: 100%; border-radius: 4px; background: var(--accent); transition: width 0.3s; }
+.outcome .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }

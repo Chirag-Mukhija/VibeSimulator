@@ -92,3 +92,47 @@ test("the open-source gallery repo loads", async ({ page }) => {
   await expect(page.getByTestId("flow-title")).toHaveText("POST /signup");
   await expect(page.locator(".lifeline-head").filter({ hasText: "MongoDB" })).toHaveCount(1);
 });
+
+test("scale mode finds the bottleneck and a what-if relieves it", async ({ page }) => {
+  await page.goto("/#/repo/instabackend?tab=scale&flow=flow%3Aroute%3APOST%3A%2Fapi%2Fauth%2Fregister");
+  const scale = page.getByTestId("scale");
+  await expect(scale.getByRole("heading", { name: /Scale: POST \/api\/auth\/register/ })).toBeVisible();
+  // About 52 signups/s: past the ~15/s that one instance's four hashing threads can do at bcrypt cost 12.
+  await scale.getByLabel(/Requests per second/).fill("400");
+  const outcome = page.getByTestId("outcome");
+  await expect(outcome.first()).toContainText(/Bottleneck: .*Thread pool/i, { timeout: 15_000 });
+  await scale.getByLabel(/App instances/).fill("400"); // 7 instances
+  await expect(outcome).toHaveCount(2, { timeout: 15_000 });
+  await expect(outcome.nth(1)).toContainText("With your changes");
+  await expect(outcome.nth(1)).not.toContainText(/Bottleneck: .*Thread pool/i);
+});
+
+test("scale defaults to the busiest request when no flow is chosen", async ({ page }) => {
+  await page.goto("/#/repo/job-scheduler?tab=scale");
+  await expect(page.getByRole("heading", { name: "Scale: POST /jobs" })).toBeVisible();
+  await expect(page.getByTestId("scale-result")).toBeVisible({ timeout: 15_000 });
+  // Only what-ifs that apply to this flow are offered: it writes, so no read cache.
+  await expect(page.getByTestId("whatif-cache")).toHaveCount(0);
+  await page.goto("/#/repo/job-scheduler?tab=scale&flow=flow%3Aroute%3AGET%3A%2Fstats");
+  await expect(page.getByTestId("whatif-cache")).toBeVisible();
+});
+
+test("long pages scroll inside the workspace instead of being cut off", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 600 });
+  await page.goto("/#/repo/hackathon-starter?tab=findings");
+  const wrap = page.locator(".stage .map-wrap");
+  await expect(page.getByTestId("findings")).toBeVisible();
+  const { scrollHeight, clientHeight } = await wrap.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }));
+  expect(clientHeight).toBeLessThan(600);
+  expect(scrollHeight).toBeGreaterThan(clientHeight);
+});
+
+test("scale mode still works where Web Workers are blocked", async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as unknown as { Worker: unknown }).Worker = function () {
+      throw new Error("workers blocked");
+    };
+  });
+  await page.goto("/#/repo/job-scheduler?tab=scale");
+  await expect(page.getByTestId("scale-result")).toBeVisible({ timeout: 15_000 });
+});

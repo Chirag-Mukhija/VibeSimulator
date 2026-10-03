@@ -52,16 +52,16 @@ gallery/              pre-analyzed traces + curated notes
 
 ## Phases
 
-| # | Deliverable | Acceptance / go-no-go |
-|---|---|---|
-| P0 | Monorepo, `spec` package, 2 hand-written spec fixtures, vitest | Done 2026-10-03 |
-| P1 | Extractor v1 (Express on JS/TS; pg, Prisma, redis, ioredis, ws, fetch/axios, S3, timers, frontend fetch/WebSocket incl. inline HTML scripts) + `eval` vs hand-labeled truth | **GO/NO-GO:** edge precision ≥90%, recall ≥85%; 100% of edges carry evidence; unknowns `unresolved`, never guessed |
-| P2 | Web Flow Player: load JSON, overview, path picker, step-through animation, L0/L1 inspector, code evidence | Browser smoke test passes; review on gallery repos |
-| P3 | Findings engine + concept registry wiring | Each rule has positive and negative fixtures |
-| P4 | Sim engine + calibration harness + 12 concept mini-sims + Learn pages | Engine matches queueing theory (M/M/1, Little's law); polling vs WebSocket sim within ±25% of measured |
-| P5 | Gallery + curated walkthroughs; static build; CLI usable locally | First shareable release (public deploy only with owner's approval) |
-| P6 | Scale mode on real flows + fixed what-if menu (add LB, add cache, add queue, polling to SSE, add replica) | Each transform moves metrics in the direction theory and calibration predict |
-| Later | Hosted GitHub-URL analyzer, Python/Java/Go extractors, OpenTelemetry import, free-form editing, accounts | Not scheduled |
+| # | Deliverable | Acceptance / go-no-go | Status |
+|---|---|---|---|
+| P0 | Monorepo, `spec` package, 2 hand-written spec fixtures, vitest | Fixtures validate, tests green | Done |
+| P1 | Extractor v1 (Express on JS/TS; pg, Prisma, redis, ioredis, ws, fetch/axios, S3, timers, frontend fetch/WebSocket incl. inline HTML scripts) + `eval` vs hand-labeled truth | **GO/NO-GO:** edge precision ≥90%, recall ≥85%; 100% of edges carry evidence; unknowns `unresolved`, never guessed | Done: 100%/100% on 6 fixtures; blind first runs 100%/81.3% (proshop-v2) and 100%/93.2% (hackathon-starter) |
+| P2 | Web Flow Player: load JSON, overview, path picker, step-through animation, L0/L1 inspector, code evidence | Browser smoke test passes; review on gallery repos | Done |
+| P3 | Findings engine + concept registry wiring | Each rule has positive and negative fixtures | Done: 18 finding types |
+| P4 | Sim engine + calibration harness + 12 concept mini-sims + Learn pages | Engine matches queueing theory (M/M/1, Little's law); polling vs WebSocket sim within ±25% of measured | Done: calibration PASS (`calibration/REPORT.md`) |
+| P5 | Gallery + curated walkthroughs; static build; CLI usable locally | First shareable release (public deploy only with owner's approval) | Done: private preview published; public deploy awaiting approval |
+| P6 | Scale mode on real flows + fixed what-if menu (add LB, add cache, add queue, polling to SSE, add replica, batch loops) | Each transform moves metrics in the direction theory and calibration predict | Done: `packages/sim/test/flowsim.test.ts` |
+| Later | Hosted GitHub-URL analyzer, Python/Java/Go extractors, OpenTelemetry import, free-form editing, accounts | Not scheduled | |
 
 ## Gallery
 

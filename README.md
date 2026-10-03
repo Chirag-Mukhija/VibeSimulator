@@ -2,7 +2,7 @@
 
 See how every request really moves through your backend, verified from the code, and what will break when traffic grows.
 
-Point it at a JavaScript or TypeScript backend. It reads the code (nothing is uploaded, nothing is executed) and builds every path from a click, timer or message to the database and back: each function, query, Redis command, publish, WebSocket push and outside API call, with the line of code that proves it. A web viewer plays each path as an animated sequence diagram, explains every hop in plain words, flags what breaks at scale, and links each pattern to a Learn page with a simulation calibrated against a real Node server.
+Point it at a JavaScript or TypeScript backend. It reads the code (nothing is uploaded, nothing is executed) and builds every path from a click, timer or message to the database and back: each function, query, Redis command, publish, WebSocket push and outside API call, with the line of code that proves it. A web viewer plays each path as an animated sequence diagram, explains every hop in plain words, flags what breaks at scale, and links each pattern to a Learn page with a simulation calibrated against a real Node server. The Scale tab runs any path under load (its real queries, Redis commands, API calls and password hashes) and lets you try fixes: more instances, a read cache, a background queue, push instead of polling, a read replica, batched queries.
 
 ## Quick start
 
@@ -38,6 +38,10 @@ pnpm --filter @vibesim/web build      # apps/web/dist
 
 Anything it can't prove is shown as a dashed, unresolved hop with the reason. It never guesses.
 
+## Scale mode
+
+Pick a path and turn up the traffic. A discrete-event simulation replays that path's hops with each instance's event loop, libuv thread pool, connection pool and the database's cores as queues, and reports median and p95 latency, failures, which part saturates first, and where a request's time goes. Costs come from the code (bcrypt cost factor, missing indexes from your migrations, loops, parallel calls, which third-party API) and from the calibration below. The numbers are a model, not a benchmark: use them to see which part gives out first and whether a fix helps, not to quote exact milliseconds. The assumptions are listed on the page.
+
 ## Accuracy
 
 The extractor is scored against hand-labeled ground truth (`packages/extractor/eval`): every expected edge as `from -> to @ file:line`.
@@ -72,7 +76,7 @@ Every held-out check landed within ±25%; see `calibration/REPORT.md`. The engin
 packages/spec        Trace Spec v1: the JSON format, validated with zod
 packages/extractor   ts-morph analyzer, eval harness and blind samples
 packages/findings    deterministic scale-risk rules
-packages/sim         discrete-event engine + calibrated parameters
+packages/sim         discrete-event engine, calibrated parameters, flow simulation for Scale mode
 packages/catalog     concept catalog, Learn pages and their simulations
 apps/cli             `vibesim analyze`
 apps/web             the static viewer (Vite + React), Playwright tests in e2e/

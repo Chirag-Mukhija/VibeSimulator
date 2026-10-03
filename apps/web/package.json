@@ -16,7 +16,8 @@
     "@vibesim/findings": "workspace:*",
     "@vibesim/spec": "workspace:*",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "@vibesim/sim": "workspace:*"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",

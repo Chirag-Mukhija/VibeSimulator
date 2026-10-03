@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import type { TraceSpec } from "@vibesim/spec";
-import { buildModel } from "../lib/model.ts";
+import type { Flow, TraceSpec } from "@vibesim/spec";
+import { buildModel, type Model } from "../lib/model.ts";
 import { getLocalTrace, loadGalleryIndex, loadGalleryTrace, type GalleryEntry } from "../lib/data.ts";
 import { navigate, type Route } from "../lib/router.ts";
 import { FlowList } from "../components/FlowList.tsx";
@@ -11,11 +11,12 @@ import { FindingsView } from "../components/FindingsView.tsx";
 import { DeepDive } from "../components/DeepDive.tsx";
 import { TopBar } from "../components/TopBar.tsx";
 import { OverviewView } from "../components/OverviewView.tsx";
+import { ScaleView } from "../components/ScaleView.tsx";
 import { buildOverview } from "../lib/summary.ts";
 import { Icon } from "../components/ui.tsx";
 import { setCurrentRepo } from "../lib/session.ts";
 
-type Tab = "overview" | "flows" | "map" | "findings";
+type Tab = "overview" | "flows" | "map" | "findings" | "scale";
 
 export function RepoView({ route, id }: { route: Route; id: string }) {
   const [spec, setSpec] = useState<TraceSpec | undefined>(id === "local" ? getLocalTrace() : undefined);
@@ -76,6 +77,8 @@ export function RepoView({ route, id }: { route: Route; id: string }) {
   if (!model) return (<><TopBar /><div className="page faint">Loading trace…</div></>);
 
   const flow = flowId ? model.flows.get(flowId) : undefined;
+  // Scale defaults to the flow you were looking at, else the busiest request.
+  const scaleFlowId = flowId ?? defaultScaleFlow(model);
   const select = (ref: string) => {
     setSelection(ref);
     setInspectorOpen(true);
@@ -95,10 +98,10 @@ export function RepoView({ route, id }: { route: Route; id: string }) {
         subtitle={`${model.spec.meta.stats.routes ?? 0} routes · ${model.spec.flows.length} flows · ${model.spec.meta.stats.filesAnalyzed ?? "?"} files`}
         left={<button className="btn icon ghost mobile-only" onClick={() => setSidebarOpen(!sidebarOpen)} aria-label="Flows"><Icon name="menu" /></button>}
       >
-        <div className="tabs" role="tablist">
-          {(["overview", "flows", "map", "findings"] as Tab[]).map((t) => (
+        <div className="tabs" role="tablist" ref={(el) => el?.querySelector<HTMLElement>(".tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" })}>
+          {(["overview", "flows", "map", "findings", "scale"] as Tab[]).map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} className={`tab${tab === t ? " active" : ""}`} onClick={() => set({ tab: t })} data-testid={`tab-${t}`}>
-              {t === "overview" ? "Overview" : t === "flows" ? "Flows" : t === "map" ? "Map" : "Findings"}
+              {t === "overview" ? "Overview" : t === "flows" ? "Flows" : t === "map" ? "Map" : t === "scale" ? "Scale" : "Findings"}
               {t === "findings" && model.spec.findings.length > 0 && (
                 <span className="row" style={{ gap: 3 }}>
                   {counts.high > 0 && <span className="sev high" />}
@@ -109,12 +112,12 @@ export function RepoView({ route, id }: { route: Route; id: string }) {
           ))}
         </div>
       </TopBar>
-      <div className={`workspace${tab === "findings" ? " wide" : ""}${tab === "map" ? " map" : ""}${tab === "overview" ? " solo" : ""}`}>
+      <div className={`workspace${tab === "findings" || tab === "scale" ? " wide" : ""}${tab === "map" ? " map" : ""}${tab === "overview" ? " solo" : ""}`}>
         <aside className={`sidebar panel${sidebarOpen ? " open" : ""}`} hidden={tab === "map" || tab === "overview"}>
-          <FlowList model={model} activeFlow={tab === "flows" ? flowId : undefined} onOpen={(fid) => {
+          <FlowList model={model} activeFlow={tab === "flows" || tab === "scale" ? scaleFlowId ?? flowId : undefined} onOpen={(fid) => {
             setSidebarOpen(false);
             setFocusEdge(undefined);
-            navigate(["repo", id], { tab: "flows", flow: fid }, false);
+            navigate(["repo", id], { tab: tab === "scale" ? "scale" : "flows", flow: fid }, false);
           }} />
         </aside>
         <main className="stage">
@@ -126,6 +129,7 @@ export function RepoView({ route, id }: { route: Route; id: string }) {
             : <div className="empty">Pick a flow on the left.</div>)}
           {tab === "map" && <SystemMap model={model} selected={selection} onSelect={select} />}
           {tab === "findings" && <FindingsView model={model} onShowFlow={showFlow} onOpenConcept={setConceptId} />}
+          {tab === "scale" && scaleFlowId && model.flows.get(scaleFlowId) && <ScaleView model={model} flow={model.flows.get(scaleFlowId)!} />}
           {tab === "overview" && (
             <OverviewView model={model} entry={entry} onOpenConcept={setConceptId} onTab={(t) => set({ tab: t })}
               onOpenFlow={(fid) => {
@@ -174,4 +178,12 @@ function TourBar({ stops, index, labelOf, onGo, onExit }: { stops: string[]; ind
         : <button className="btn small" onClick={onExit}>Finish the tour</button>}
     </div>
   );
+}
+
+/** The request that leans on the backend hardest: most calls to databases, caches, queues and APIs. */
+function defaultScaleFlow(model: Model): string | undefined {
+  const backend = new Set(["database", "cache", "queue", "topic", "external-api", "compute"]);
+  const weight = (f: Flow) => f.steps.filter((s) => backend.has(model.nodes.get(model.edges.get(s.edge)!.to)!.kind)).length;
+  const requests = model.spec.flows.filter((f) => model.nodes.get(f.entry)!.kind === "client");
+  return [...requests].sort((a, b) => weight(b) - weight(a))[0]?.id ?? model.spec.flows[0]?.id;
 }

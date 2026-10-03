@@ -35,6 +35,9 @@ importers:
       '@vibesim/findings':
         specifier: workspace:*
         version: link:../../packages/findings
+      '@vibesim/sim':
+        specifier: workspace:*
+        version: link:../../packages/sim
       '@vibesim/spec':
         specifier: workspace:*
         version: link:../../packages/spec
@@ -100,7 +103,11 @@ importers:
         specifier: workspace:*
         version: link:../spec
 
-  packages/sim: {}
+  packages/sim:
+    dependencies:
+      '@vibesim/spec':
+        specifier: workspace:*
+        version: link:../spec
 
   packages/spec:
     dependencies:

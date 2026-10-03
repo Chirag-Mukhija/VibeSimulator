@@ -8,8 +8,11 @@ function initialTheme(): Theme {
     const saved = localStorage.getItem("vibesim:theme");
     if (saved === "dark" || saved === "light") return saved;
   } catch {
-    // storage blocked: fall back to the system preference
+    // storage blocked: fall back to the host's choice or the system preference
   }
+  // A host page (like an artifact viewer) may already have set the reader's theme.
+  const host = document.documentElement.dataset.theme;
+  if (host === "dark" || host === "light") return host;
   return window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
 }
 
