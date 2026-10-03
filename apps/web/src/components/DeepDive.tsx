@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import { CATEGORY_LABELS, concept } from "@vibesim/catalog";
+import { CATEGORY_LABELS, concept, page } from "@vibesim/catalog";
+import { SimLab } from "./SimLab.tsx";
 import { href } from "../lib/router.ts";
 import { Icon } from "./ui.tsx";
 
@@ -23,8 +24,11 @@ export function DeepDive({ id, onClose, onOpen }: { id: string; onClose(): void;
         </div>
         <h2 style={{ fontSize: 22 }}>{c.title}</h2>
         <p style={{ margin: 0, fontSize: 15, color: "var(--text-dim)" }}>{c.summary}</p>
-        {c.full ? (
-          <a className="btn primary" href={href(["learn", c.id])} style={{ justifySelf: "start" }}><Icon name="book" />Open the full page and simulation</a>
+        {c.full && page(c.id) ? (
+          <>
+            <SimLab key={c.id} sim={page(c.id)!.sim} compact />
+            <a className="btn" href={href(["learn", c.id])} style={{ justifySelf: "start" }}><Icon name="book" />Read the full page</a>
+          </>
         ) : (
           <p className="faint" style={{ margin: 0 }}>A full page with a simulation is not written for this concept yet.</p>
         )}

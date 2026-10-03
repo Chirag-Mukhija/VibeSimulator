@@ -1,0 +1,13 @@
+{
+  "name": "@vibesim/calibration",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "calibrate": "node run.ts"
+  },
+  "dependencies": {
+    "@vibesim/sim": "workspace:*",
+    "ws": "^8.18.0"
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "measuredOn": "Apple M2 (8 cores), darwin 27.0.0",
+  "node": "v24.18.0",
+  "measuredAt": "2026-10-03",
+  "baselineRssMB": 66.38,
+  "memoryPerConnectionKB": {
+    "ws": 11.63,
+    "sse": 25.69,
+    "longpoll": 22.51
+  },
+  "cpuPerRequestUs": 33.44,
+  "cpuBusyBaseFraction": 0.0615,
+  "cpuPerWsMessageUs": 4.15,
+  "validation": [
+    {
+      "what": "ws memory, 3000 connections",
+      "unit": "MB",
+      "measured": 29.63,
+      "predicted": 34.07,
+      "error": 0.15
+    },
+    {
+      "what": "sse memory, 3000 connections",
+      "unit": "MB",
+      "measured": 74.55,
+      "predicted": 75.26,
+      "error": 0.01
+    },
+    {
+      "what": "longpoll memory, 3000 connections",
+      "unit": "MB",
+      "measured": 66.06,
+      "predicted": 65.95,
+      "error": -0.002
+    },
+    {
+      "what": "short polling CPU at 1,500 req/s",
+      "unit": "% of a core",
+      "measured": 12,
+      "predicted": 11.17,
+      "error": -0.07
+    },
+    {
+      "what": "short polling CPU at 3,000 req/s",
+      "unit": "% of a core",
+      "measured": 17.04,
+      "predicted": 16.18,
+      "error": -0.05
+    },
+    {
+      "what": "WebSocket push CPU, 2,000 clients × 20 messages",
+      "unit": "ms CPU",
+      "measured": 201.75,
+      "predicted": 166,
+      "error": -0.177
+    }
+  ],
+  "pass": true
+}

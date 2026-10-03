@@ -11,6 +11,7 @@ import { FindingsView } from "../components/FindingsView.tsx";
 import { DeepDive } from "../components/DeepDive.tsx";
 import { TopBar } from "../components/TopBar.tsx";
 import { Icon } from "../components/ui.tsx";
+import { setCurrentRepo } from "../lib/session.ts";
 
 type Tab = "flows" | "map" | "findings";
 
@@ -29,6 +30,9 @@ export function RepoView({ route, id }: { route: Route; id: string }) {
     return () => { cancelled = true; };
   }, [id]);
   const model = useMemo(() => (spec ? buildModel(spec) : undefined), [spec]);
+  useEffect(() => {
+    if (model) setCurrentRepo(id, entry?.title ?? model.spec.meta.repo.name, model);
+  }, [model, entry, id]);
 
   const tab = (route.query.get("tab") as Tab) || "flows";
   const flowId = route.query.get("flow") ?? undefined;

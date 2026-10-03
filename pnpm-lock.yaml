@@ -64,7 +64,20 @@ importers:
         specifier: ^8.3.2
         version: 8.3.2(@types/node@24.19.1)(yaml@2.9.1)
 
-  packages/catalog: {}
+  calibration:
+    dependencies:
+      '@vibesim/sim':
+        specifier: workspace:*
+        version: link:../packages/sim
+      ws:
+        specifier: ^8.18.0
+        version: 8.22.0
+
+  packages/catalog:
+    dependencies:
+      '@vibesim/sim':
+        specifier: workspace:*
+        version: link:../sim
 
   packages/extractor:
     dependencies:
@@ -86,6 +99,8 @@ importers:
       '@vibesim/spec':
         specifier: workspace:*
         version: link:../spec
+
+  packages/sim: {}
 
   packages/spec:
     dependencies:
@@ -675,6 +690,18 @@ packages:
     engines: {node: '>=20.11'}
     hasBin: true
 
+  ws@8.22.0:
+    resolution: {integrity: sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
   yaml@2.9.1:
     resolution: {integrity: sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw==}
     engines: {node: '>= 14.6'}
@@ -1067,6 +1094,8 @@ snapshots:
       - msw
 
   why-is-node-running@3.2.1: {}
+
+  ws@8.22.0: {}
 
   yaml@2.9.1: {}
 

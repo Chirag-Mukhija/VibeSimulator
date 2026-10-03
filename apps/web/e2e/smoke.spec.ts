@@ -43,3 +43,32 @@ test("a dropped file that is not a trace shows a readable error", async ({ page 
   await page.getByTestId("file-input").setInputFiles({ name: "bad.json", mimeType: "application/json", buffer: Buffer.from('{"nope":true}') });
   await expect(page.locator(".error-box")).toContainText("not a valid vibeSimulator trace");
 });
+
+test("a Learn page asks for a prediction, then shows the simulated result", async ({ page }) => {
+  await page.goto("/#/learn/connection-pooling");
+  await expect(page.getByTestId("learn-page")).toContainText("The problem it solves");
+  await expect(page.getByTestId("predict")).toBeVisible();
+  await page.getByTestId("predict-option").first().click();
+  await expect(page.getByTestId("sim-result")).toBeVisible();
+  await expect(page.getByTestId("guess-result")).toContainText("The simulation says");
+  await page.getByTestId("why").click();
+  await expect(page.getByTestId("sim-result").locator(".fix")).toBeVisible();
+});
+
+test("every full concept has a working simulation", async ({ page }) => {
+  await page.goto("/#/learn");
+  const full = page.getByTestId("concept-card").filter({ hasText: "simulation" });
+  await expect(full).toHaveCount(12);
+  for (const id of ["http-request-lifecycle", "short-polling", "long-polling", "server-sent-events", "websocket", "pub-sub", "message-queue", "load-balancer", "cache-aside", "n-plus-one", "concurrency-models"]) {
+    await page.goto(`/#/learn/${id}`);
+    await page.getByRole("button", { name: "Skip, just run it" }).click();
+    await expect(page.getByTestId("sim-result").locator(".metric").first()).toBeVisible();
+  }
+});
+
+test("the deep-dive drawer embeds the concept's simulation", async ({ page }) => {
+  await page.goto("/#/repo/paytmentgateway?tab=map");
+  await page.getByTestId("system-map").getByRole("button", { name: /Postgres/ }).click();
+  await page.getByTestId("inspector").getByRole("button", { name: /Connection pooling/ }).click();
+  await expect(page.getByTestId("deep-dive").getByTestId("simlab")).toBeVisible();
+});

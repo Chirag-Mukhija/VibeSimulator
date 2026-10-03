@@ -366,3 +366,38 @@ a.card:hover { border-color: var(--accent); text-decoration: none; transform: tr
   .topbar { gap: 6px; }
   .tabs { min-width: 0; }
 }
+
+/* ------------------------------------------------------------------- learn */
+
+.learn { max-width: 860px; display: grid; gap: 26px; }
+.learn-section { display: grid; gap: 10px; }
+.learn-section h2 { font-size: 19px; }
+.learn-section p { margin: 0; color: var(--text-dim); font-size: 15px; line-height: 1.65; }
+.learn-section ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; color: var(--text-dim); font-size: 15px; }
+.simlab { border: 1px solid var(--border-strong); border-radius: 14px; background: var(--bg-elev); padding: 18px; display: grid; gap: 16px; box-shadow: var(--shadow); }
+.simlab.compact { padding: 14px; box-shadow: none; }
+.simlab-head { display: grid; gap: 6px; }
+.simlab-head h3 { font-size: 17px; }
+.knobs { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+.knob { display: grid; gap: 6px; font-size: 13px; }
+.knob-label { display: flex; justify-content: space-between; gap: 8px; color: var(--text-dim); }
+.knob-label b { color: var(--text); font-weight: 500; }
+.knob input[type="range"] { width: 100%; accent-color: var(--accent); }
+.predict { display: grid; gap: 10px; padding: 14px; border-radius: 10px; background: var(--accent-soft); }
+.sim-result { display: grid; gap: 16px; }
+.verdict-line { padding: 10px 12px; border-radius: 8px; font-size: 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.verdict-line.right { background: color-mix(in srgb, var(--k-external) 16%, transparent); }
+.verdict-line.wrong { background: color-mix(in srgb, var(--sev-medium) 16%, transparent); }
+.metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.metric { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: grid; gap: 2px; background: var(--bg); }
+.metric-value { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.metric.good .metric-value { color: var(--k-external); }
+.metric.bad .metric-value { color: var(--sev-high); }
+.metric-label { font-size: 12px; color: var(--text-dim); }
+.metric-hint { font-size: 11px; color: var(--text-faint); }
+.charts { display: grid; gap: 18px; }
+.chart { margin: 0; display: grid; gap: 8px; }
+.chart figcaption { font-size: 12.5px; font-weight: 600; color: var(--text-dim); }
+.assumptions { font-size: 13px; color: var(--text-dim); }
+.assumptions summary { cursor: pointer; color: var(--text-faint); }
+.assumptions ul { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; }
