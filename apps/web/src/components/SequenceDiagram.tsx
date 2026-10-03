@@ -102,10 +102,6 @@ export function SequenceDiagram({ timeline, active, progress, selected, findings
                 <path d={style === "solid" ? "M0,0 L10,5 L0,10 z" : "M1,1 L9,5 L1,9"} fill={style === "solid" ? markerColor(c) : "none"} stroke={markerColor(c)} strokeWidth="1.5" strokeLinejoin="round" />
               </marker>
             )))}
-            <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-              <feGaussianBlur stdDeviation="3" result="b" />
-              <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
-            </filter>
           </defs>
           {participants.map((p) => (
             <line key={p.id} x1={x(p.id)} x2={x(p.id)} y1={0} y2={height} stroke="var(--border-strong)" strokeDasharray="3 5" />
@@ -158,7 +154,7 @@ export function SequenceDiagram({ timeline, active, progress, selected, findings
                 )}
                 {isActive && (
                   <circle cx={x1 + (x2 - x1) * progress + (self ? 30 * Math.sin(progress * Math.PI) : 0)} cy={yy} r={5.5}
-                    fill={isCall ? color : "var(--text-dim)"} filter="url(#glow)" data-testid="packet" />
+                    fill={isCall ? color : "var(--text-dim)"} stroke="var(--bg)" strokeWidth={2} data-testid="packet" />
                 )}
               </g>
             );

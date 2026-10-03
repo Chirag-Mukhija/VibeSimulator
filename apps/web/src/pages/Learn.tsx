@@ -13,20 +13,21 @@ export function LearnIndex() {
       <TopBar />
       <div className="page">
         <section className="hero" style={{ paddingBottom: 8 }}>
-          <h1 style={{ fontSize: 34 }}>Learn</h1>
-          <p>The ideas behind every arrow in a flow. Pages marked "simulation" let you change the inputs and watch where it breaks, with memory and CPU numbers measured on a real Node server.</p>
+          <span className="eyebrow">Concepts</span>
+          <h1>The ideas behind every arrow</h1>
+          <p>Pages marked "simulation" let you change the inputs and watch where it breaks, with memory and CPU numbers measured on a real Node server.</p>
         </section>
         {categories.map((cat) => {
           const list = CONCEPTS.filter((c) => c.category === cat);
           if (!list.length) return null;
           return (
             <section className="section" key={cat}>
-              <h2>{CATEGORY_LABELS[cat]}</h2>
-              <div className="cards">
+              <div className="section-head"><h2>{CATEGORY_LABELS[cat]}</h2><span className="faint">{list.length}</span></div>
+              <div className="concept-list">
                 {list.map((c) => (
-                  <a key={c.id} className="card" href={href(["learn", c.id])} data-testid="concept-card">
-                    <div className="row"><h3 className="grow">{c.title}</h3>{c.full && <span className="chip accent">simulation</span>}</div>
-                    <p>{c.summary}</p>
+                  <a key={c.id} className="concept-row" href={href(["learn", c.id])} data-testid="concept-card">
+                    <b>{c.title}{c.full && <span className="eyebrow" style={{ color: "var(--accent-text)" }}>simulation</span>}</b>
+                    <span className="muted">{c.summary}</span>
                   </a>
                 ))}
               </div>
@@ -50,8 +51,8 @@ export function LearnPage({ id }: { id: string }) {
       <article className="page learn" data-testid="learn-page">
         <a href="#/learn">← All concepts</a>
         <header className="hero" style={{ paddingBottom: 4 }}>
-          <span className="chip" style={{ justifySelf: "start" }}>{CATEGORY_LABELS[c.category]}</span>
-          <h1 style={{ fontSize: "clamp(28px, 4vw, 38px)" }}>{c.title}</h1>
+          <span className="eyebrow">{CATEGORY_LABELS[c.category]}</span>
+          <h1>{c.title}</h1>
           <p>{c.summary}</p>
         </header>
         {p ? (

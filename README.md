@@ -4,6 +4,8 @@ See how every request really moves through your backend, verified from the code,
 
 Point it at a JavaScript or TypeScript backend. It reads the code (nothing is uploaded, nothing is executed) and builds every path from a click, timer or message to the database and back: each function, query, Redis command, publish, WebSocket push and outside API call, with the line of code that proves it. A web viewer plays each path as an animated sequence diagram, explains every hop in plain words, flags what breaks at scale, and links each pattern to a Learn page with a simulation calibrated against a real Node server. The Scale tab runs any path under load (its real queries, Redis commands, API calls and password hashes) and lets you try fixes: more instances, a read cache, a background queue, push instead of polling, a read replica, batched queries.
 
+**Docs:** [Usage guide](docs/USAGE.md) · [Architecture](docs/ARCHITECTURE.md)
+
 ## Quick start
 
 Requires Node 24+ and pnpm.
@@ -82,6 +84,8 @@ apps/cli             `vibesim analyze`
 apps/web             the static viewer (Vite + React), Playwright tests in e2e/
 calibration          real-server measurements
 fixtures/repos       ground-truth repos (the three gallery repos are source-only copies)
+docs/USAGE.md        how to run it, analyze a repo and read the views
+docs/ARCHITECTURE.md how it works inside
 docs/PLAN.md         the plan
 ```
 
