@@ -13,8 +13,11 @@ export const SCHEMA_VERSION = "1";
 
 export const NODE_KINDS = [
   // Triggers: where a flow starts.
-  "ui-event", // click/submit handler in frontend code
-  "timer", // setInterval, cron
+  "client", // any HTTP caller, used when the repo has no frontend code for a route
+  "ui-event", // click/submit/page-load handler in frontend code
+  "timer", // setInterval, setTimeout loop, cron
+  // Infrastructure in front of the code.
+  "proxy", // reverse proxy / load balancer (nginx)
   // Server entry points.
   "route", // HTTP route
   "ws-endpoint",
@@ -23,16 +26,20 @@ export const NODE_KINDS = [
   "middleware",
   "handler",
   "service",
-  "worker", // queue consumer
+  "worker", // queue consumer / job handler
   // Resources.
   "database",
-  "cache",
+  "cache", // key-value store (Redis used for keys, sorted sets, sessions)
   "queue",
   "topic", // pub/sub channel
   "external-api",
+  "compute", // CPU-heavy library work (bcrypt, image resize) and where it runs
   // Could not be classified; always paired with confidence "unresolved".
   "unknown",
 ] as const;
+
+/** Deployable units: which process a flow runs in. */
+export const SERVICE_KINDS = ["http-server", "worker", "frontend", "proxy", "datastore"] as const;
 
 export const PROTOCOLS = [
   "in-process", // plain function call, no network hop
@@ -45,6 +52,7 @@ export const PROTOCOLS = [
   "redis",
   "amqp",
   "kafka",
+  "smtp",
   "unknown",
 ] as const;
 
@@ -175,7 +183,17 @@ export const Flow = z.strictObject({
   id: Id,
   label: z.string().min(1),
   entry: Id,
+  /** Process the entry runs in, when known. */
+  service: Id.optional(),
   steps: z.array(FlowStep).min(1),
+});
+
+export const Service = z.strictObject({
+  id: Id,
+  kind: z.enum(SERVICE_KINDS),
+  label: z.string().min(1),
+  evidence: z.array(Evidence).min(1),
+  props: Props,
 });
 
 export const Finding = z.strictObject({
@@ -214,6 +232,8 @@ export const Meta = z.strictObject({
       .optional(),
   }),
   frameworks: z.array(z.string().min(1)).default([]),
+  /** Counts for display, e.g. filesAnalyzed. */
+  stats: z.record(z.string(), z.number()).default({}),
 });
 
 export const TraceSpec = z
@@ -221,6 +241,7 @@ export const TraceSpec = z
     $schema: z.string().optional(),
     schemaVersion: z.literal(SCHEMA_VERSION),
     meta: Meta,
+    services: z.array(Service).default([]),
     nodes: z.array(TraceNode),
     edges: z.array(TraceEdge).default([]),
     flows: z.array(Flow).default([]),
@@ -236,6 +257,7 @@ export type FlowStep = z.infer<typeof FlowStep>;
 export type Flow = z.infer<typeof Flow>;
 export type Finding = z.infer<typeof Finding>;
 export type Gap = z.infer<typeof Gap>;
+export type Service = z.infer<typeof Service>;
 export type Meta = z.infer<typeof Meta>;
 export type TraceSpec = z.infer<typeof TraceSpec>;
 export type TraceSpecInput = z.input<typeof TraceSpec>;
@@ -247,7 +269,7 @@ function checkReferences(spec: TraceSpec, ctx: z.RefinementCtx) {
 
   // Ids are unique across every collection, so a ref is never ambiguous.
   const seen = new Set<string>();
-  const collections = ["nodes", "edges", "flows", "findings", "gaps"] as const;
+  const collections = ["services", "nodes", "edges", "flows", "findings", "gaps"] as const;
   for (const name of collections) {
     spec[name].forEach((item, i) => {
       if (seen.has(item.id)) issue([name, i, "id"], `duplicate id "${item.id}"`);
@@ -265,7 +287,11 @@ function checkReferences(spec: TraceSpec, ctx: z.RefinementCtx) {
   });
 
   // A flow is a walk from its entry: each step must leave a node the flow has already reached.
+  const services = new Set(spec.services.map((s) => s.id));
   spec.flows.forEach((flow, i) => {
+    if (flow.service !== undefined && !services.has(flow.service)) {
+      issue(["flows", i, "service"], `unknown service "${flow.service}"`);
+    }
     if (!nodes.has(flow.entry)) {
       issue(["flows", i, "entry"], `unknown node "${flow.entry}"`);
       return;

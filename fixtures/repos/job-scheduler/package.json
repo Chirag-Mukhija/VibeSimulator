@@ -1,0 +1,21 @@
+{
+  "name": "job-scheduler",
+  "version": "1.0.0",
+  "description": "Distributed task queue and job scheduler built from scratch",
+  "main": "api/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node api/server.js",
+    "dev": "node --watch api/server.js",
+    "migrate": "node api/db/migrate.js",
+    "worker": "node worker/index.js",
+    "worker:dev": "node --watch worker/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "pg": "^8.12.0",
+    "redis": "^6.2.1",
+    "ws": "^8.21.3"
+  }
+}

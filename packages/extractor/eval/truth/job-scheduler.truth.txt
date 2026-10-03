@@ -1,0 +1,89 @@
+# Ground truth for fixtures/repos/job-scheduler, labeled by hand from the source.
+# Same edge contract and syntax as paytmentgateway.truth.txt.
+
+let JSON = mw:express.json@api/server.js:17
+let JOBS = fn:api/routes/jobs.js
+let QS = fn:api/services/queueService.js
+let RQ = fn:api/services/redisQueue.js
+let PUB = fn:api/services/events.js#publishEvent
+let DB = db:postgres
+let REDIS = redis
+let TOPIC = topic:job:events
+let DASH = api/public/dashboard.html
+
+# ---- HTTP routes (api process)
+route POST /jobs @ api/routes/jobs.js:7
+chain POST /jobs = $JSON @ api/server.js:17 > $JOBS#@7 @ api/routes/jobs.js:7
+route GET /jobs @ api/routes/jobs.js:34
+chain GET /jobs = $JSON @ api/server.js:17 > $JOBS#@34 @ api/routes/jobs.js:34
+route GET /jobs/:id @ api/routes/jobs.js:48
+chain GET /jobs/:id = $JSON @ api/server.js:17 > $JOBS#@48 @ api/routes/jobs.js:48
+route POST /jobs/:id/retry @ api/routes/jobs.js:62
+chain POST /jobs/:id/retry = $JSON @ api/server.js:17 > $JOBS#@62 @ api/routes/jobs.js:62
+route GET /stats @ api/routes/stats.js:8
+chain GET /stats = $JSON @ api/server.js:17 > fn:api/routes/stats.js#@8 @ api/routes/stats.js:8
+route GET /dashboard @ api/server.js:21
+chain GET /dashboard = $JSON @ api/server.js:17 > fn:api/server.js#@21 @ api/server.js:21
+
+edge $JOBS#@7 -> $QS#enqueueJob @ api/routes/jobs.js:27
+edge $JOBS#@34 -> $QS#listJobs @ api/routes/jobs.js:37
+edge $JOBS#@48 -> $QS#getJobById @ api/routes/jobs.js:50
+edge $JOBS#@62 -> $QS#retryJob @ api/routes/jobs.js:64
+edge fn:api/routes/stats.js#@8 -> $DB @ api/routes/stats.js:10
+
+# ---- queueService (shared by api and worker)
+edge $QS#enqueueJob -> $DB @ api/services/queueService.js:11
+edge $QS#enqueueJob -> $RQ#addJob @ api/services/queueService.js:20
+edge $QS#enqueueJob -> $PUB @ api/services/queueService.js:21
+edge $QS#getJobById -> $DB @ api/services/queueService.js:26
+edge $QS#listJobs -> $DB @ api/services/queueService.js:32
+edge $QS#listJobs -> $DB @ api/services/queueService.js:39
+edge $QS#claimNextJob -> $RQ#peekDueJob @ api/services/queueService.js:56
+edge $QS#claimNextJob -> $DB @ api/services/queueService.js:61
+edge $QS#claimNextJob -> $RQ#removeJob @ api/services/queueService.js:69
+edge $QS#claimNextJob -> $PUB @ api/services/queueService.js:73
+edge $QS#completeJob -> $DB @ api/services/queueService.js:85
+edge $QS#completeJob -> $PUB @ api/services/queueService.js:94
+edge $QS#recordFailure -> $DB @ api/services/queueService.js:103
+edge $QS#recordFailure -> $PUB @ api/services/queueService.js:112
+edge $QS#recordFailure -> $DB @ api/services/queueService.js:117
+edge $QS#recordFailure -> $RQ#addJob @ api/services/queueService.js:127
+edge $QS#recordFailure -> $PUB @ api/services/queueService.js:128
+edge $QS#retryJob -> $DB @ api/services/queueService.js:134
+edge $QS#retryJob -> $RQ#addJob @ api/services/queueService.js:148
+edge $QS#retryJob -> $PUB @ api/services/queueService.js:149
+
+# ---- Redis helpers (the redis client is passed in as a parameter)
+edge $RQ#addJob -> $REDIS @ api/services/redisQueue.js:12
+edge $RQ#removeJob -> $REDIS @ api/services/redisQueue.js:16
+edge $RQ#peekDueJob -> $REDIS @ api/services/redisQueue.js:21
+edge $PUB -> $TOPIC @ api/services/events.js:10
+
+# ---- worker process
+edge timer:worker/index.js:29 -> fn:worker/index.js#poll @ worker/index.js:29
+edge fn:worker/index.js#poll -> fn:worker/jobRunner.js#runOnce @ worker/index.js:20
+edge fn:worker/jobRunner.js#runOnce -> $QS#claimNextJob @ worker/jobRunner.js:6
+# handlers[job.type] is enumerable: the object literal maps two job types
+edge fn:worker/jobRunner.js#runOnce -> fn:worker/handlers/sendEmail.js#sendEmail @ worker/jobRunner.js:19
+edge fn:worker/jobRunner.js#runOnce -> fn:worker/handlers/resizeImage.js#resizeImage @ worker/jobRunner.js:19
+edge fn:worker/jobRunner.js#runOnce -> $QS#completeJob @ worker/jobRunner.js:20
+edge fn:worker/jobRunner.js#runOnce -> $QS#recordFailure @ worker/jobRunner.js:23
+edge timer:worker/index.js:36 -> fn:worker/index.js#@36 @ worker/index.js:36
+edge fn:worker/index.js#@36 -> $PUB @ worker/index.js:37
+
+# ---- pub/sub -> websocket push (api process)
+edge $TOPIC -> fn:api/server.js#@42 @ api/server.js:42
+edge fn:api/server.js#@42 -> fn:api/ws/broadcast.js#broadcast @ api/server.js:49
+edge fn:api/ws/broadcast.js#broadcast -> ws:/ @ api/ws/broadcast.js:18
+edge ws:/ -> fn:api/server.js#@33 @ api/server.js:33
+
+# ---- dashboard frontend (inline script)
+edge ui:$DASH#load -> fn:$DASH#loadInitial @ $DASH:144
+edge ui:$DASH#load -> fn:$DASH#connect @ $DASH:145
+edge fn:$DASH#loadInitial -> route:GET /jobs @ $DASH:101
+edge fn:$DASH#loadInitial -> route:GET /stats @ $DASH:102
+edge fn:$DASH#connect -> ws:/ @ $DASH:118
+edge ws:/ -> fn:$DASH#@131 @ $DASH:131
+edge fn:$DASH#@131 -> fn:$DASH#refreshStats @ $DASH:140
+edge fn:$DASH#refreshStats -> route:GET /stats @ $DASH:111
+edge timer:$DASH:146 -> fn:$DASH#refreshStats @ $DASH:146

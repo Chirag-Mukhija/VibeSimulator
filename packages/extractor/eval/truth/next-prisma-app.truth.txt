@@ -1,0 +1,45 @@
+# Ground truth for fixtures/repos/next-prisma-app (Next.js App Router), labeled from the source
+# before the extractor supported Next.js. Same contract as paytmentgateway.truth.txt.
+# Next route handlers have no middleware: the chain is just the exported handler, and the
+# "registration" evidence is the handler's own declaration line.
+# JSX event handlers become ui:<file>:<line of the attribute>; useEffect becomes ui:<file>:<line of the call>.
+
+let DB = db:postgres
+let POSTS = fn:lib/posts.ts
+
+route GET /api/posts @ app/api/posts/route.ts:4
+chain GET /api/posts = fn:app/api/posts/route.ts#GET @ app/api/posts/route.ts:4
+route POST /api/posts @ app/api/posts/route.ts:9
+chain POST /api/posts = fn:app/api/posts/route.ts#POST @ app/api/posts/route.ts:9
+route GET /api/posts/:id @ app/api/posts/[id]/route.ts:3
+chain GET /api/posts/:id = fn:app/api/posts/[id]/route.ts#GET @ app/api/posts/[id]/route.ts:3
+route POST /api/summarize @ app/api/summarize/route.ts:4
+chain POST /api/summarize = fn:app/api/summarize/route.ts#POST @ app/api/summarize/route.ts:4
+# async server component page: renders on the server and reads the database
+route GET / @ app/page.tsx:5
+chain GET / = fn:app/page.tsx#Home @ app/page.tsx:5
+
+edge fn:app/api/posts/route.ts#GET -> $POSTS#listPosts @ app/api/posts/route.ts:5
+edge fn:app/api/posts/route.ts#POST -> $POSTS#createPost @ app/api/posts/route.ts:11
+edge fn:app/api/posts/[id]/route.ts#GET -> $POSTS#getPost @ app/api/posts/[id]/route.ts:4
+edge fn:app/api/summarize/route.ts#POST -> $POSTS#getPost @ app/api/summarize/route.ts:6
+edge fn:app/api/summarize/route.ts#POST -> ext:openai-api @ app/api/summarize/route.ts:7
+edge fn:app/api/summarize/route.ts#POST -> ext:hooks-slack-com @ app/api/summarize/route.ts:11
+edge fn:app/page.tsx#Home -> $POSTS#listPosts @ app/page.tsx:6
+
+# prisma global singleton (globalThis.prisma ?? new PrismaClient()), provider postgresql
+edge $POSTS#listPosts -> $DB @ lib/posts.ts:4
+edge $POSTS#createPost -> $DB @ lib/posts.ts:8
+edge $POSTS#createPost -> $DB @ lib/posts.ts:10
+edge $POSTS#getPost -> $DB @ lib/posts.ts:16
+
+# client components
+edge ui:components/NewPostForm.tsx:19 -> fn:components/NewPostForm.tsx#handleSubmit @ components/NewPostForm.tsx:19
+edge fn:components/NewPostForm.tsx#handleSubmit -> route:POST /api/posts @ components/NewPostForm.tsx:10
+edge ui:components/Feed.tsx:8 -> fn:components/Feed.tsx#@8 @ components/Feed.tsx:8
+edge fn:components/Feed.tsx#@8 -> fn:components/Feed.tsx#load @ components/Feed.tsx:10
+edge fn:components/Feed.tsx#load -> route:GET /api/posts @ components/Feed.tsx:9
+edge timer:components/Feed.tsx:11 -> fn:components/Feed.tsx#load @ components/Feed.tsx:11
+edge ui:components/Feed.tsx:20 -> fn:components/Feed.tsx#@20 @ components/Feed.tsx:20
+edge fn:components/Feed.tsx#@20 -> fn:components/Feed.tsx#summarize @ components/Feed.tsx:20
+edge fn:components/Feed.tsx#summarize -> route:POST /api/summarize @ components/Feed.tsx:28

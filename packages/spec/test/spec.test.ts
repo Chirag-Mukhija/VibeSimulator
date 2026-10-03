@@ -108,6 +108,7 @@ describe("validateTraceSpec", () => {
     ["in-process edge with a pooled connection", (s) => void (s.edges[0]!.lifecycle = "pooled"), '"in-process" and lifecycle "none"'],
     ["network edge with no lifecycle", (s) => void (s.edges[1]!.lifecycle = "none"), '"in-process" and lifecycle "none"'],
     ["flow entry that does not exist", (s) => void (s.flows[0]!.entry = "route:nope"), 'unknown node "route:nope"'],
+    ["flow in an unknown service", (s) => void (s.flows[0]!.service = "svc:nope"), 'unknown service "svc:nope"'],
     ["flow step the walk has not reached", (s) => void s.flows[0]!.steps.reverse(), "has not reached"],
     ["same edge twice in one flow", (s) => void s.flows[0]!.steps.push({ edge: "e:1" }), "appears twice"],
     ["flow step to a missing edge", (s) => void s.flows[0]!.steps.push({ edge: "e:9" }), 'unknown edge "e:9"'],

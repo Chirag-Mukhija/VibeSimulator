@@ -1,0 +1,242 @@
+# Ground truth for fixtures/repos/instabackend, labeled by hand from the source.
+# Same edge contract and syntax as paytmentgateway.truth.txt, plus:
+#   proxy NODE client@LOC route@LOC   all later routes are entered through this proxy
+#
+# Naming: `module.exports = (req, res, next) => ...` is named "default".
+# Thin forwarding wrappers around a resource client (config/db.js `query`) are
+# inlined, so services point straight at the database. Wrappers around compute
+# libraries (utils/password.js) stay as their own nodes.
+
+let APP = mw:helmet@src/app.js:26 @ src/app.js:26 > mw:morgan@src/app.js:28 @ src/app.js:28 > mw:cors@src/app.js:29 @ src/app.js:29 > mw:express.json@src/app.js:30 @ src/app.js:30 > mw:cookie-parser@src/app.js:31 @ src/app.js:31
+let GUARD = fn:src/middlewares/auth.middleware.js#default
+let LIMIT = mw:express-rate-limit@src/middlewares/rateLimit.middleware.js:7
+let C = fn:src/controllers
+let S = fn:src/services
+let DB = db:postgres
+let R = src/routes
+
+proxy proxy:nginx client@nginx.conf:15 route@nginx.conf:20
+
+route GET /health @ src/app.js:33
+chain GET /health = $APP > fn:src/app.js#@33 @ src/app.js:33
+
+# ---- auth
+route POST /api/auth/register @ $R/auth.routes.js:11
+chain POST /api/auth/register = $APP > $LIMIT @ $R/auth.routes.js:11 > $C/auth.controller.js#register @ $R/auth.routes.js:11
+route POST /api/auth/login @ $R/auth.routes.js:12
+chain POST /api/auth/login = $APP > $LIMIT @ $R/auth.routes.js:12 > $C/auth.controller.js#login @ $R/auth.routes.js:12
+route POST /api/auth/refresh @ $R/auth.routes.js:13
+chain POST /api/auth/refresh = $APP > $LIMIT @ $R/auth.routes.js:13 > $C/auth.controller.js#refresh @ $R/auth.routes.js:13
+route POST /api/auth/logout @ $R/auth.routes.js:14
+chain POST /api/auth/logout = $APP > $C/auth.controller.js#logout @ $R/auth.routes.js:14
+route GET /api/auth/me @ $R/auth.routes.js:15
+chain GET /api/auth/me = $APP > $GUARD @ $R/auth.routes.js:15 > $C/auth.controller.js#me @ $R/auth.routes.js:15
+
+# ---- uploads
+route POST /api/uploads/presign @ $R/upload.routes.js:9
+chain POST /api/uploads/presign = $APP > $GUARD @ $R/upload.routes.js:9 > $C/upload.controller.js#presign @ $R/upload.routes.js:9
+
+# ---- users / profiles
+route GET /api/users/me @ $R/profile.routes.js:11
+chain GET /api/users/me = $APP > $GUARD @ $R/profile.routes.js:11 > $C/profile.controller.js#getMe @ $R/profile.routes.js:11
+route PATCH /api/users/me @ $R/profile.routes.js:12
+chain PATCH /api/users/me = $APP > $GUARD @ $R/profile.routes.js:12 > $C/profile.controller.js#updateMe @ $R/profile.routes.js:12
+route GET /api/users/:username @ $R/profile.routes.js:13
+chain GET /api/users/:username = $APP > $C/profile.controller.js#getByUsername @ $R/profile.routes.js:13
+route GET /api/users/:username/posts @ $R/profile.routes.js:14
+chain GET /api/users/:username/posts = $APP > $C/post.controller.js#listByUsername @ $R/profile.routes.js:14
+route POST /api/users/:username/follow @ $R/profile.routes.js:15
+chain POST /api/users/:username/follow = $APP > $GUARD @ $R/profile.routes.js:15 > $C/follow.controller.js#followUser @ $R/profile.routes.js:15
+route DELETE /api/users/:username/follow @ $R/profile.routes.js:16
+chain DELETE /api/users/:username/follow = $APP > $GUARD @ $R/profile.routes.js:16 > $C/follow.controller.js#unfollowUser @ $R/profile.routes.js:16
+route GET /api/users/:username/followers @ $R/profile.routes.js:17
+chain GET /api/users/:username/followers = $APP > $C/follow.controller.js#getFollowers @ $R/profile.routes.js:17
+route GET /api/users/:username/following @ $R/profile.routes.js:18
+chain GET /api/users/:username/following = $APP > $C/follow.controller.js#getFollowing @ $R/profile.routes.js:18
+route GET /api/users/:username/follow-status @ $R/profile.routes.js:19
+chain GET /api/users/:username/follow-status = $APP > $GUARD @ $R/profile.routes.js:19 > $C/follow.controller.js#getFollowStatus @ $R/profile.routes.js:19
+
+# ---- posts, likes, comments
+route POST /api/posts @ $R/post.routes.js:11
+chain POST /api/posts = $APP > $GUARD @ $R/post.routes.js:11 > $C/post.controller.js#create @ $R/post.routes.js:11
+route GET /api/posts/:id @ $R/post.routes.js:12
+chain GET /api/posts/:id = $APP > $C/post.controller.js#getById @ $R/post.routes.js:12
+route POST /api/posts/:id/like @ $R/post.routes.js:14
+chain POST /api/posts/:id/like = $APP > $GUARD @ $R/post.routes.js:14 > $C/like.controller.js#likePost @ $R/post.routes.js:14
+route DELETE /api/posts/:id/like @ $R/post.routes.js:15
+chain DELETE /api/posts/:id/like = $APP > $GUARD @ $R/post.routes.js:15 > $C/like.controller.js#unlikePost @ $R/post.routes.js:15
+route GET /api/posts/:id/like-status @ $R/post.routes.js:16
+chain GET /api/posts/:id/like-status = $APP > $GUARD @ $R/post.routes.js:16 > $C/like.controller.js#getLikeStatus @ $R/post.routes.js:16
+route POST /api/posts/:id/comments @ $R/post.routes.js:18
+chain POST /api/posts/:id/comments = $APP > $GUARD @ $R/post.routes.js:18 > $C/comment.controller.js#create @ $R/post.routes.js:18
+route GET /api/posts/:id/comments @ $R/post.routes.js:19
+chain GET /api/posts/:id/comments = $APP > $C/comment.controller.js#list @ $R/post.routes.js:19
+route DELETE /api/posts/:id/comments/:commentId @ $R/post.routes.js:20
+chain DELETE /api/posts/:id/comments/:commentId = $APP > $GUARD @ $R/post.routes.js:20 > $C/comment.controller.js#remove @ $R/post.routes.js:20
+
+# ---- feed, notifications, search, explore
+route GET /api/feed/fanout-write @ $R/feed.routes.js:9
+chain GET /api/feed/fanout-write = $APP > $GUARD @ $R/feed.routes.js:9 > $C/feed.controller.js#getFanoutWrite @ $R/feed.routes.js:9
+route GET /api/feed/fanout-read @ $R/feed.routes.js:10
+chain GET /api/feed/fanout-read = $APP > $GUARD @ $R/feed.routes.js:10 > $C/feed.controller.js#getFanoutRead @ $R/feed.routes.js:10
+route GET /api/notifications @ $R/notification.routes.js:9
+chain GET /api/notifications = $APP > $GUARD @ $R/notification.routes.js:9 > $C/notification.controller.js#list @ $R/notification.routes.js:9
+route PATCH /api/notifications/:id/read @ $R/notification.routes.js:10
+chain PATCH /api/notifications/:id/read = $APP > $GUARD @ $R/notification.routes.js:10 > $C/notification.controller.js#markRead @ $R/notification.routes.js:10
+route PATCH /api/notifications/read-all @ $R/notification.routes.js:11
+chain PATCH /api/notifications/read-all = $APP > $GUARD @ $R/notification.routes.js:11 > $C/notification.controller.js#markAllRead @ $R/notification.routes.js:11
+route GET /api/search/users @ $R/search.routes.js:8
+chain GET /api/search/users = $APP > $C/search.controller.js#searchUsers @ $R/search.routes.js:8
+route GET /api/explore @ $R/explore.routes.js:8
+chain GET /api/explore = $APP > $C/post.controller.js#explore @ $R/explore.routes.js:8
+
+# ---- rate limiter keeps its counters in Redis
+edge $LIMIT -> redis @ src/middlewares/rateLimit.middleware.js:12
+
+# ---- controllers
+edge $C/auth.controller.js#register -> $S/auth.service.js#register @ src/controllers/auth.controller.js:29
+edge $C/auth.controller.js#login -> $S/auth.service.js#login @ src/controllers/auth.controller.js:39
+edge $C/auth.controller.js#refresh -> $S/auth.service.js#refresh @ src/controllers/auth.controller.js:49
+edge $C/auth.controller.js#logout -> $S/auth.service.js#logout @ src/controllers/auth.controller.js:56
+edge $C/auth.controller.js#me -> $S/user.service.js#findById @ src/controllers/auth.controller.js:64
+
+edge $C/comment.controller.js#resolvePost -> $S/post.service.js#findById @ src/controllers/comment.controller.js:8
+edge $C/comment.controller.js#create -> $C/comment.controller.js#resolvePost @ src/controllers/comment.controller.js:17
+edge $C/comment.controller.js#create -> $S/comment.service.js#createComment @ src/controllers/comment.controller.js:25
+edge $C/comment.controller.js#create -> $S/notification.service.js#create @ src/controllers/comment.controller.js:26
+edge $C/comment.controller.js#list -> $C/comment.controller.js#resolvePost @ src/controllers/comment.controller.js:37
+edge $C/comment.controller.js#list -> $S/comment.service.js#listByPost @ src/controllers/comment.controller.js:40
+edge $C/comment.controller.js#remove -> $S/comment.service.js#findById @ src/controllers/comment.controller.js:49
+edge $C/comment.controller.js#remove -> $S/post.service.js#findById @ src/controllers/comment.controller.js:52
+edge $C/comment.controller.js#remove -> $S/comment.service.js#deleteComment @ src/controllers/comment.controller.js:56
+
+edge $C/feed.controller.js#getFanoutWrite -> $S/feed.service.js#getFeedFanoutWrite @ src/controllers/feed.controller.js:6
+edge $C/feed.controller.js#getFanoutRead -> $S/feed.service.js#getFeedFanoutRead @ src/controllers/feed.controller.js:14
+
+edge $C/follow.controller.js#resolveTargetUser -> $S/user.service.js#findByUsername @ src/controllers/follow.controller.js:8
+edge $C/follow.controller.js#followUser -> $C/follow.controller.js#resolveTargetUser @ src/controllers/follow.controller.js:17
+edge $C/follow.controller.js#followUser -> $S/follow.service.js#follow @ src/controllers/follow.controller.js:20
+edge $C/follow.controller.js#followUser -> $S/notification.service.js#create @ src/controllers/follow.controller.js:22
+edge $C/follow.controller.js#unfollowUser -> $C/follow.controller.js#resolveTargetUser @ src/controllers/follow.controller.js:28
+edge $C/follow.controller.js#unfollowUser -> $S/follow.service.js#unfollow @ src/controllers/follow.controller.js:31
+edge $C/follow.controller.js#getFollowers -> $C/follow.controller.js#resolveTargetUser @ src/controllers/follow.controller.js:36
+edge $C/follow.controller.js#getFollowers -> $S/follow.service.js#listFollowers @ src/controllers/follow.controller.js:39
+edge $C/follow.controller.js#getFollowing -> $C/follow.controller.js#resolveTargetUser @ src/controllers/follow.controller.js:47
+edge $C/follow.controller.js#getFollowing -> $S/follow.service.js#listFollowing @ src/controllers/follow.controller.js:50
+edge $C/follow.controller.js#getFollowStatus -> $C/follow.controller.js#resolveTargetUser @ src/controllers/follow.controller.js:59
+edge $C/follow.controller.js#getFollowStatus -> $S/follow.service.js#isFollowing @ src/controllers/follow.controller.js:63
+edge $C/follow.controller.js#getFollowStatus -> $S/follow.service.js#isFollowing @ src/controllers/follow.controller.js:64
+
+edge $C/like.controller.js#resolvePost -> $S/post.service.js#findById @ src/controllers/like.controller.js:7
+edge $C/like.controller.js#likePost -> $C/like.controller.js#resolvePost @ src/controllers/like.controller.js:16
+edge $C/like.controller.js#likePost -> $S/like.service.js#like @ src/controllers/like.controller.js:19
+edge $C/like.controller.js#likePost -> $S/notification.service.js#create @ src/controllers/like.controller.js:21
+edge $C/like.controller.js#unlikePost -> $C/like.controller.js#resolvePost @ src/controllers/like.controller.js:27
+edge $C/like.controller.js#unlikePost -> $S/like.service.js#unlike @ src/controllers/like.controller.js:30
+edge $C/like.controller.js#getLikeStatus -> $C/like.controller.js#resolvePost @ src/controllers/like.controller.js:35
+edge $C/like.controller.js#getLikeStatus -> $S/like.service.js#hasLiked @ src/controllers/like.controller.js:38
+
+edge $C/notification.controller.js#list -> $S/notification.service.js#listForUser @ src/controllers/notification.controller.js:7
+edge $C/notification.controller.js#list -> $S/notification.service.js#countUnread @ src/controllers/notification.controller.js:8
+edge $C/notification.controller.js#markRead -> $S/notification.service.js#markRead @ src/controllers/notification.controller.js:14
+edge $C/notification.controller.js#markAllRead -> $S/notification.service.js#markAllRead @ src/controllers/notification.controller.js:20
+
+edge $C/post.controller.js#create -> $S/feed.service.js#publishPost @ src/controllers/post.controller.js:20
+edge $C/post.controller.js#getById -> $S/post.service.js#findById @ src/controllers/post.controller.js:25
+edge $C/post.controller.js#getById -> $S/like.service.js#countByPost @ src/controllers/post.controller.js:29
+edge $C/post.controller.js#getById -> $S/comment.service.js#countByPost @ src/controllers/post.controller.js:30
+edge $C/post.controller.js#listByUsername -> $S/user.service.js#findByUsername @ src/controllers/post.controller.js:37
+edge $C/post.controller.js#listByUsername -> $S/post.service.js#listByUserId @ src/controllers/post.controller.js:40
+edge $C/post.controller.js#explore -> $S/post.service.js#listRecent @ src/controllers/post.controller.js:49
+
+edge $C/profile.controller.js#getByUsername -> $S/profile.service.js#getPublicProfile @ src/controllers/profile.controller.js:6
+edge $C/profile.controller.js#getMe -> $S/profile.service.js#getOwnProfile @ src/controllers/profile.controller.js:11
+edge $C/profile.controller.js#updateMe -> $S/profile.service.js#updateOwnProfile @ src/controllers/profile.controller.js:22
+
+edge $C/search.controller.js#searchUsers -> $S/user.service.js#searchByUsernamePrefix @ src/controllers/search.controller.js:11
+edge $C/upload.controller.js#presign -> $S/upload.service.js#createPresignedUpload @ src/controllers/upload.controller.js:10
+
+# ---- services: orchestration
+edge $S/auth.service.js#issueTokenPair -> $S/token.service.js#createSession @ src/services/auth.service.js:15
+edge $S/auth.service.js#register -> $S/user.service.js#findByEmail @ src/services/auth.service.js:22
+edge $S/auth.service.js#register -> $S/user.service.js#findByUsername @ src/services/auth.service.js:25
+edge $S/auth.service.js#register -> fn:src/utils/password.js#hashPassword @ src/services/auth.service.js:29
+edge $S/auth.service.js#register -> $S/user.service.js#createUser @ src/services/auth.service.js:30
+edge $S/auth.service.js#register -> $S/auth.service.js#issueTokenPair @ src/services/auth.service.js:31
+edge $S/auth.service.js#login -> $S/user.service.js#findByEmail @ src/services/auth.service.js:37
+edge $S/auth.service.js#login -> fn:src/utils/password.js#verifyPassword @ src/services/auth.service.js:40
+edge $S/auth.service.js#login -> $S/auth.service.js#issueTokenPair @ src/services/auth.service.js:43
+edge $S/auth.service.js#refresh -> $S/token.service.js#isSessionValid @ src/services/auth.service.js:57
+edge $S/auth.service.js#refresh -> $S/token.service.js#revokeSession @ src/services/auth.service.js:60
+edge $S/auth.service.js#refresh -> $S/user.service.js#findById @ src/services/auth.service.js:62
+edge $S/auth.service.js#refresh -> $S/auth.service.js#issueTokenPair @ src/services/auth.service.js:65
+edge $S/auth.service.js#logout -> $S/token.service.js#revokeSession @ src/services/auth.service.js:71
+
+edge $S/feed.service.js#fanOutOnWrite -> $S/follow.service.js#getFollowerIds @ src/services/feed.service.js:9
+edge $S/feed.service.js#fanOutOnWrite -> $DB @ src/services/feed.service.js:18
+edge $S/feed.service.js#publishPost -> $S/post.service.js#createPost @ src/services/feed.service.js:27
+edge $S/feed.service.js#publishPost -> $S/feed.service.js#fanOutOnWrite @ src/services/feed.service.js:28
+edge $S/feed.service.js#getFeedFanoutWrite -> $DB @ src/services/feed.service.js:43
+edge $S/feed.service.js#getFeedFanoutRead -> $DB @ src/services/feed.service.js:70
+
+edge $S/profile.service.js#toPublicProfile -> $S/post.service.js#countByUserId @ src/services/profile.service.js:15
+edge $S/profile.service.js#toPublicProfile -> $S/follow.service.js#countFollowers @ src/services/profile.service.js:16
+edge $S/profile.service.js#toPublicProfile -> $S/follow.service.js#countFollowing @ src/services/profile.service.js:17
+edge $S/profile.service.js#getPublicProfile -> $S/user.service.js#findByUsername @ src/services/profile.service.js:35
+edge $S/profile.service.js#getPublicProfile -> $S/profile.service.js#toPublicProfile @ src/services/profile.service.js:37
+edge $S/profile.service.js#getOwnProfile -> $S/user.service.js#findById @ src/services/profile.service.js:41
+edge $S/profile.service.js#getOwnProfile -> $S/profile.service.js#toPublicProfile @ src/services/profile.service.js:43
+edge $S/profile.service.js#updateOwnProfile -> $S/user.service.js#updateProfile @ src/services/profile.service.js:47
+edge $S/profile.service.js#updateOwnProfile -> $S/profile.service.js#toPublicProfile @ src/services/profile.service.js:49
+
+edge $S/user.service.js#updateProfile -> $S/user.service.js#findById @ src/services/user.service.js:71
+
+# ---- services: I/O
+edge $S/comment.service.js#createComment -> $DB @ src/services/comment.service.js:6
+edge $S/comment.service.js#findById -> $DB @ src/services/comment.service.js:16
+edge $S/comment.service.js#listByPost -> $DB @ src/services/comment.service.js:32
+edge $S/comment.service.js#deleteComment -> $DB @ src/services/comment.service.js:50
+edge $S/comment.service.js#countByPost -> $DB @ src/services/comment.service.js:54
+
+edge $S/follow.service.js#follow -> $DB @ src/services/follow.service.js:18
+edge $S/follow.service.js#unfollow -> $DB @ src/services/follow.service.js:28
+edge $S/follow.service.js#isFollowing -> $DB @ src/services/follow.service.js:32
+edge $S/follow.service.js#countFollowers -> $DB @ src/services/follow.service.js:40
+edge $S/follow.service.js#countFollowing -> $DB @ src/services/follow.service.js:45
+edge $S/follow.service.js#listFollowers -> $DB @ src/services/follow.service.js:60
+edge $S/follow.service.js#listFollowing -> $DB @ src/services/follow.service.js:87
+edge $S/follow.service.js#getFollowerIds -> $DB @ src/services/follow.service.js:105
+
+edge $S/like.service.js#like -> $DB @ src/services/like.service.js:7
+edge $S/like.service.js#unlike -> $DB @ src/services/like.service.js:16
+edge $S/like.service.js#hasLiked -> $DB @ src/services/like.service.js:20
+edge $S/like.service.js#countByPost -> $DB @ src/services/like.service.js:25
+
+edge $S/notification.service.js#create -> $DB @ src/services/notification.service.js:9
+edge $S/notification.service.js#listForUser -> $DB @ src/services/notification.service.js:28
+edge $S/notification.service.js#countUnread -> $DB @ src/services/notification.service.js:46
+edge $S/notification.service.js#markRead -> $DB @ src/services/notification.service.js:55
+edge $S/notification.service.js#markAllRead -> $DB @ src/services/notification.service.js:65
+
+edge $S/post.service.js#createPost -> $DB @ src/services/post.service.js:6
+edge $S/post.service.js#findById -> $DB @ src/services/post.service.js:16
+edge $S/post.service.js#listByUserId -> $DB @ src/services/post.service.js:33
+edge $S/post.service.js#listRecent -> $DB @ src/services/post.service.js:59
+edge $S/post.service.js#countByUserId -> $DB @ src/services/post.service.js:75
+
+edge $S/token.service.js#createSession -> redis @ src/services/token.service.js:20
+edge $S/token.service.js#isSessionValid -> redis @ src/services/token.service.js:25
+edge $S/token.service.js#revokeSession -> redis @ src/services/token.service.js:30
+
+edge $S/upload.service.js#createPresignedUpload -> ext:aws-s3 @ src/services/upload.service.js:44
+
+edge $S/user.service.js#searchByUsernamePrefix -> $DB @ src/services/user.service.js:14
+edge $S/user.service.js#findByEmail -> $DB @ src/services/user.service.js:28
+edge $S/user.service.js#findByUsername -> $DB @ src/services/user.service.js:33
+edge $S/user.service.js#findById -> $DB @ src/services/user.service.js:38
+edge $S/user.service.js#createUser -> $DB @ src/services/user.service.js:43
+edge $S/user.service.js#updateProfile -> $DB @ src/services/user.service.js:74
+
+# ---- compute: bcrypt runs on libuv's thread pool
+edge fn:src/utils/password.js#hashPassword -> compute:bcrypt @ src/utils/password.js:6
+edge fn:src/utils/password.js#verifyPassword -> compute:bcrypt @ src/utils/password.js:8

@@ -1,0 +1,44 @@
+# Ground truth for fixtures/repos/express-ts-mongo (TypeScript, ESM), labeled from the source
+# before the extractor supported classes, socket.io rooms or BullMQ workers.
+# Mongoose models share one connection, so every model call lands on db:mongodb.
+
+let JSON = mw:express.json@src/server.ts:11 @ src/server.ts:11
+let AUTHMW = fn:src/middleware/requireUser.ts#requireUser @ src/server.ts:13
+let DB = db:mongodb
+let SVC = fn:src/services/OrderService.ts
+
+route POST /auth/login @ src/routes/auth.ts:9
+chain POST /auth/login = $JSON > fn:src/routes/auth.ts#@9 @ src/routes/auth.ts:9
+route GET /orders @ src/routes/orders.ts:7
+chain GET /orders = $JSON > $AUTHMW > fn:src/routes/orders.ts#@7 @ src/routes/orders.ts:7
+route POST /orders @ src/routes/orders.ts:11
+chain POST /orders = $JSON > $AUTHMW > fn:src/routes/orders.ts#@11 @ src/routes/orders.ts:11
+route GET /orders/:id/tracking @ src/routes/orders.ts:17
+chain GET /orders/:id/tracking = $JSON > $AUTHMW > fn:src/routes/orders.ts#@17 @ src/routes/orders.ts:17
+
+edge fn:src/routes/auth.ts#@9 -> $DB @ src/routes/auth.ts:12
+# bcryptjs is pure JavaScript: compareSync blocks the event loop
+edge fn:src/routes/auth.ts#@9 -> compute:bcryptjs @ src/routes/auth.ts:13
+
+edge fn:src/routes/orders.ts#@7 -> $SVC#list @ src/routes/orders.ts:8
+edge $SVC#list -> $DB @ src/services/OrderService.ts:16
+edge fn:src/routes/orders.ts#@11 -> fn:src/services/shipping.ts#quote @ src/routes/orders.ts:12
+edge fn:src/routes/orders.ts#@11 -> $SVC#create @ src/routes/orders.ts:13
+edge fn:src/services/shipping.ts#quote -> ext:api-shipfast-example @ src/services/shipping.ts:6
+edge $SVC#create -> $DB @ src/services/OrderService.ts:9
+# this.queue is the constructor parameter, bound to emailQueue at `new OrderService(emailQueue)`
+edge $SVC#create -> queue:email @ src/services/OrderService.ts:10
+# io.to(room).emit(...) pushes over socket.io
+edge $SVC#create -> ws:/ @ src/services/OrderService.ts:11
+edge fn:src/routes/orders.ts#@17 -> fn:src/services/shipping.ts#track @ src/routes/orders.ts:18
+edge fn:src/services/shipping.ts#track -> ext:tracking-example-com @ src/services/shipping.ts:11
+
+# socket.io server with no browser code in the repo: entered by a generic client
+edge client -> ws:/ @ src/server.ts:16
+edge ws:/ -> fn:src/realtime/sockets.ts#@4 @ src/realtime/sockets.ts:4
+
+# BullMQ worker process consumes the "email" queue
+edge queue:email -> fn:src/worker.ts#@7 @ src/worker.ts:5
+edge fn:src/worker.ts#@7 -> $DB @ src/worker.ts:8
+edge fn:src/worker.ts#@7 -> fn:src/services/mailer.ts#sendMail @ src/worker.ts:9
+edge fn:src/services/mailer.ts#sendMail -> ext:smtp-server @ src/services/mailer.ts:6

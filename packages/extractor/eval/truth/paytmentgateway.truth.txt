@@ -1,0 +1,54 @@
+# Ground truth for fixtures/repos/paytmentgateway, labeled by hand from the source.
+#
+# Edge contract (what a perfect extractor emits):
+#   - every HTTP route: entry -> route, then the middleware/handler chain in order;
+#     each chain edge's evidence is where its target was registered
+#   - every call site that performs I/O on a resource (query, connect, release, ...)
+#   - calls between user functions, but only when the callee eventually performs I/O
+#     or notable compute (plain helpers are left out)
+#
+# Syntax:
+#   let NAME = text                  textual substitution for $NAME
+#   route METHOD PATH @ file:line    entry -> route
+#   chain METHOD PATH = node @ loc > node @ loc > ...
+#   edge FROM -> TO @ file:line
+
+let LOG = fn:src/middleware/requestLogger.js#requestLogger
+let JSON = mw:express.json@src/app.js:9
+let AUTH = fn:src/middleware/auth.js#auth
+let CTRL = fn:src/controllers/paymentController.js
+let SVC = fn:src/services/paymentService.js
+let DB = db:postgres
+
+route GET /health @ src/app.js:12
+chain GET /health = $LOG @ src/app.js:8 > $JSON @ src/app.js:9 > fn:src/app.js#@12 @ src/app.js:12
+
+route POST /payments @ src/routes/payments.js:13
+chain POST /payments = $LOG @ src/app.js:8 > $JSON @ src/app.js:9 > $AUTH @ src/routes/payments.js:11 > $CTRL#createPaymentHandler @ src/routes/payments.js:13
+
+route GET /payments/:id @ src/routes/payments.js:14
+chain GET /payments/:id = $LOG @ src/app.js:8 > $JSON @ src/app.js:9 > $AUTH @ src/routes/payments.js:11 > $CTRL#getPaymentHandler @ src/routes/payments.js:14
+
+route GET /payments @ src/routes/payments.js:15
+chain GET /payments = $LOG @ src/app.js:8 > $JSON @ src/app.js:9 > $AUTH @ src/routes/payments.js:11 > $CTRL#listPaymentsHandler @ src/routes/payments.js:15
+
+# auth looks up the merchant on every request
+edge $AUTH -> $DB @ src/middleware/auth.js:15
+
+edge $CTRL#createPaymentHandler -> $SVC#findPaymentByIdempotencyKey @ src/controllers/paymentController.js:16
+edge $CTRL#createPaymentHandler -> $SVC#createPayment @ src/controllers/paymentController.js:22
+edge $CTRL#getPaymentHandler -> $SVC#getPaymentById @ src/controllers/paymentController.js:32
+edge $CTRL#listPaymentsHandler -> $SVC#listPayments @ src/controllers/paymentController.js:43
+
+edge $SVC#findPaymentByIdempotencyKey -> $DB @ src/services/paymentService.js:4
+# transaction on one checked-out connection
+edge $SVC#createPayment -> $DB @ src/services/paymentService.js:16
+edge $SVC#createPayment -> $DB @ src/services/paymentService.js:19
+edge $SVC#createPayment -> $DB @ src/services/paymentService.js:21
+edge $SVC#createPayment -> $DB @ src/services/paymentService.js:31
+edge $SVC#createPayment -> $DB @ src/services/paymentService.js:37
+edge $SVC#createPayment -> $DB @ src/services/paymentService.js:40
+edge $SVC#createPayment -> $DB @ src/services/paymentService.js:55
+edge $SVC#getPaymentById -> $DB @ src/services/paymentService.js:60
+edge $SVC#getPaymentById -> $DB @ src/services/paymentService.js:67
+edge $SVC#listPayments -> $DB @ src/services/paymentService.js:76

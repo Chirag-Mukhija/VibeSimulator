@@ -1,0 +1,150 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Job Scheduler Dashboard</title>
+<style>
+  body { font-family: -apple-system, Arial, sans-serif; margin: 24px; background: #f7f6f2; color: #1a1a1a; }
+  h1 { font-size: 18px; margin-bottom: 4px; }
+  .status-line { font-size: 12px; color: #666; margin-bottom: 20px; }
+  .status-line .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: #999; }
+  .status-line .dot.connected { background: #2a7; }
+  .row { display: flex; gap: 24px; align-items: flex-start; }
+  .card { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 16px; flex: 1; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: #666; margin: 0 0 12px 0; }
+  .counts { display: flex; gap: 16px; flex-wrap: wrap; }
+  .count { text-align: center; }
+  .count .n { font-size: 24px; font-weight: 700; }
+  .count .label { font-size: 11px; color: #666; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 12px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eee; }
+  th { color: #666; font-weight: 600; }
+  .badge { padding: 2px 6px; border-radius: 3px; font-size: 11px; }
+  .badge.pending { background: #eef; }
+  .badge.processing { background: #ffe; }
+  .badge.completed { background: #efe; }
+  .badge.failed { background: #fee; }
+  .worker { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; }
+  .worker .dot { width: 8px; height: 8px; border-radius: 50%; background: #ccc; }
+  .worker .dot.online { background: #2a7; }
+</style>
+</head>
+<body>
+
+<h1>Job Scheduler Dashboard</h1>
+<div class="status-line"><span id="connDot" class="dot"></span><span id="connText">connecting...</span></div>
+
+<div class="row">
+  <div class="card">
+    <h2>Queue Depth</h2>
+    <div id="counts" class="counts"></div>
+  </div>
+  <div class="card">
+    <h2>Workers</h2>
+    <div id="workers"></div>
+  </div>
+</div>
+
+<div class="card" style="margin-top: 24px;">
+  <h2>Recent Jobs</h2>
+  <table>
+    <thead><tr><th>ID</th><th>Type</th><th>Status</th><th>Priority</th><th>Attempts</th><th>Updated</th></tr></thead>
+    <tbody id="jobRows"></tbody>
+  </table>
+</div>
+
+<script>
+  const jobsById = new Map();
+
+  function renderCounts(counts) {
+    const el = document.getElementById('counts');
+    el.innerHTML = '';
+    for (const status of ['pending', 'processing', 'completed', 'failed']) {
+      const div = document.createElement('div');
+      div.className = 'count';
+      div.innerHTML = '<div class="n">' + (counts[status] || 0) + '</div><div class="label">' + status + '</div>';
+      el.appendChild(div);
+    }
+  }
+
+  function renderWorkers(workers) {
+    const el = document.getElementById('workers');
+    el.innerHTML = '';
+    if (workers.length === 0) {
+      el.innerHTML = '<div class="worker">no workers seen yet</div>';
+      return;
+    }
+    for (const w of workers) {
+      const div = document.createElement('div');
+      div.className = 'worker';
+      div.innerHTML = '<span class="dot ' + (w.online ? 'online' : '') + '"></span>' + w.workerId.slice(0, 8) + ' — ' + (w.online ? 'online' : 'offline');
+      el.appendChild(div);
+    }
+  }
+
+  function renderJobs() {
+    const rows = Array.from(jobsById.values()).sort((a, b) => b.id - a.id).slice(0, 20);
+    const tbody = document.getElementById('jobRows');
+    tbody.innerHTML = '';
+    for (const j of rows) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + j.id + '</td><td>' + j.type + '</td>' +
+        '<td><span class="badge ' + j.status + '">' + j.status + '</span></td>' +
+        '<td>' + (j.priority ?? '-') + '</td><td>' + (j.attempts ?? '-') + '</td>' +
+        '<td>' + new Date(j.updated_at).toLocaleTimeString() + '</td>';
+      tbody.appendChild(tr);
+    }
+  }
+
+  async function loadInitial() {
+    const [jobs, stats] = await Promise.all([
+      fetch('/jobs?limit=20').then((r) => r.json()),
+      fetch('/stats').then((r) => r.json()),
+    ]);
+    for (const j of jobs) jobsById.set(j.id, j);
+    renderJobs();
+    renderCounts(stats.counts);
+    renderWorkers(stats.workers);
+  }
+
+  function refreshStats() {
+    fetch('/stats').then((r) => r.json()).then((stats) => {
+      renderCounts(stats.counts);
+      renderWorkers(stats.workers);
+    });
+  }
+
+  function connect() {
+    const ws = new WebSocket('ws://' + location.host);
+
+    ws.onopen = () => {
+      document.getElementById('connDot').classList.add('connected');
+      document.getElementById('connText').textContent = 'connected';
+    };
+
+    ws.onclose = () => {
+      document.getElementById('connDot').classList.remove('connected');
+      document.getElementById('connText').textContent = 'disconnected, retrying...';
+      setTimeout(connect, 2000);
+    };
+
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+
+      if (msg.type === 'job:created' || msg.type === 'job:claimed' || msg.type === 'job:completed' || msg.type === 'job:failed') {
+        const existing = jobsById.get(msg.jobId) || {};
+        jobsById.set(msg.jobId, { ...existing, id: msg.jobId, type: msg.jobType, status: msg.status, updated_at: msg.at });
+        renderJobs();
+      }
+
+      refreshStats();
+    };
+  }
+
+  loadInitial();
+  connect();
+  setInterval(refreshStats, 5000);
+</script>
+
+</body>
+</html>

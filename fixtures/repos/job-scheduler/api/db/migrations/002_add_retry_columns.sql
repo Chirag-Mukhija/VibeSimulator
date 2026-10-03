@@ -1,0 +1,4 @@
+ALTER TABLE jobs ADD COLUMN run_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE jobs ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3;
+
+CREATE INDEX IF NOT EXISTS idx_jobs_status_run_at ON jobs (status, run_at);

@@ -1,0 +1,13 @@
+{
+  "name": "@vibesim/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "vibesim": "./src/main.ts"
+  },
+  "dependencies": {
+    "@vibesim/extractor": "workspace:*",
+    "@vibesim/spec": "workspace:*"
+  }
+}

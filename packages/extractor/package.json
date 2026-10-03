@@ -1,0 +1,17 @@
+{
+  "name": "@vibesim/extractor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "eval": "node eval/run-eval.ts"
+  },
+  "dependencies": {
+    "@vibesim/spec": "workspace:*",
+    "ts-morph": "^28.0.0",
+    "yaml": "^2.9.1"
+  }
+}
