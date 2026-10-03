@@ -1,8 +1,9 @@
 import type { GalleryEntry } from "../src/lib/data.ts";
 
 export interface GallerySource extends Omit<GalleryEntry, "stats"> {
-  /** Repo-relative path of the source to analyze. */
-  path: string;
+  /** Repo-relative path of vendored source, or a git repo to clone at a pinned commit. */
+  path?: string;
+  clone?: { url: string; commit: string };
 }
 
 export const GALLERY: GallerySource[] = [
@@ -14,6 +15,18 @@ export const GALLERY: GallerySource[] = [
     repoUrl: "https://github.com/Chirag-Mukhija/Job-Scheduler",
     author: "Chirag Mukhija",
     stack: ["Express", "Postgres", "Redis", "WebSocket", "Worker"],
+    walkthrough: [
+      { title: "A job is submitted", flow: "flow:route:POST:/jobs",
+        body: "The API writes the job to Postgres (the durable record), adds its id to a Redis sorted set scored by run time (the fast index of what is due), and publishes job:created for the dashboards." },
+      { title: "A worker claims work", flow: "flow:timer:worker/index.js:29",
+        body: "The worker asks Redis for the earliest due job in each of 10 priority tiers, claims it with a guarded UPDATE (WHERE status = 'pending') so two workers can't take the same job, runs one of two handlers picked by job type, then completes it or schedules a retry with backoff." },
+      { title: "How the dashboard stays live", flow: "flow:topic:job:events:42",
+        body: "Workers publish events on the Redis channel job:events. The API process subscribes and pushes each event over every open WebSocket, and then every dashboard calls GET /stats again. That last step is what a scale finding flags." },
+      { title: "The page also polls", flow: "flow:timer:api/public/dashboard.html:146",
+        body: "On top of the live socket, the dashboard re-fetches /stats every 5 seconds." },
+      { title: "Workers announce themselves", flow: "flow:timer:worker/index.js:36",
+        body: "Every 5 seconds each worker publishes a heartbeat; the API keeps the last-seen time in memory to show which workers are online." },
+    ],
   },
   {
     id: "instabackend",
@@ -23,6 +36,18 @@ export const GALLERY: GallerySource[] = [
     repoUrl: "https://github.com/Chirag-Mukhija/InstaBackend",
     author: "Chirag Mukhija",
     stack: ["Express", "Postgres", "Redis", "S3", "Nginx"],
+    walkthrough: [
+      { title: "Signing up", flow: "flow:route:POST:/api/auth/register",
+        body: "Nginx forwards the request and six library middleware run, including a rate limiter that keeps its counters in Redis. The service checks email and username, hashes the password with bcrypt on libuv's thread pool, inserts the user and stores a refresh-token session in Redis." },
+      { title: "Publishing a post fans it out", flow: "flow:route:POST:/api/posts",
+        body: "Creating a post also copies it into every follower's feed (fan-out on write): one query fetches all follower ids with no limit, then one bulk INSERT. Cheap for most users, heavy for someone with a million followers." },
+      { title: "Reading the precomputed feed", flow: "flow:route:GET:/api/feed/fanout-write",
+        body: "This reads the feed_items rows written at post time. Compare it with GET /api/feed/fanout-read, which joins follows and posts on every read instead." },
+      { title: "Uploads skip the API", flow: "flow:route:POST:/api/uploads/presign",
+        body: "The server signs an S3 upload URL locally, with no network call at all, and the browser sends the image straight to S3." },
+      { title: "A profile is four queries", flow: "flow:route:GET:/api/users/:username",
+        body: "Loading a profile runs one lookup, then three COUNT queries in parallel with Promise.all." },
+    ],
   },
   {
     id: "paytmentgateway",
@@ -32,5 +57,33 @@ export const GALLERY: GallerySource[] = [
     repoUrl: "https://github.com/Chirag-Mukhija/PaytmentGateway",
     author: "Chirag Mukhija",
     stack: ["Express 5", "Postgres"],
+    walkthrough: [
+      { title: "Creating a payment", flow: "flow:route:POST:/payments",
+        body: "Auth looks up the merchant by API key on every request. The idempotency key is checked, then the payment and its first audit event are written in one transaction on a dedicated connection: BEGIN, two INSERTs, COMMIT (ROLLBACK on error), and the connection goes back to the pool." },
+      { title: "Reading a payment", flow: "flow:route:GET:/payments/:id",
+        body: "Two queries: the payment by id, then its full event history." },
+      { title: "Listing payments", flow: "flow:route:GET:/payments",
+        body: "LIMIT/OFFSET pagination capped at 100 rows, served by the (merchant_id, created_at) index from the schema." },
+    ],
+  },
+  {
+    id: "hackathon-starter",
+    clone: { url: "https://github.com/sahat/hackathon-starter", commit: "d390f81" },
+    title: "Hackathon Starter",
+    tagline: "A popular Express + MongoDB starter with Passport logins, sessions in MongoDB, email, and dozens of third-party API examples. A big real codebase to explore.",
+    repoUrl: "https://github.com/sahat/hackathon-starter",
+    author: "Sahat Yalkabov",
+    license: "MIT License; code excerpts shown under it",
+    stack: ["Express", "MongoDB", "Passport", "Sessions", "Stripe"],
+    walkthrough: [
+      { title: "Signing up", flow: "flow:route:POST:/signup",
+        body: "Fifteen middleware run before the handler, including express-session loading the session from MongoDB and Passport loading the user. The handler checks for an existing user, saves the new one, and may email a sign-in link (opening a new SMTP transport for each email)." },
+      { title: "Waiting on someone else's API", flow: "flow:route:GET:/api/nyt",
+        body: "This request waits on the New York Times API, with no timeout set." },
+      { title: "Charging a card", flow: "flow:route:POST:/api/stripe",
+        body: "Stripe is called inside the request, so checkout speed depends on Stripe's." },
+      { title: "Changing a password", flow: "flow:route:POST:/account/password",
+        body: "isAuthenticated guards the route; the handler loads the user and saves the new password." },
+    ],
   },
 ];

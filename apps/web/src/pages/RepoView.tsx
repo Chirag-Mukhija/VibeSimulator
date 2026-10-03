@@ -10,10 +10,12 @@ import { SystemMap } from "../components/SystemMap.tsx";
 import { FindingsView } from "../components/FindingsView.tsx";
 import { DeepDive } from "../components/DeepDive.tsx";
 import { TopBar } from "../components/TopBar.tsx";
+import { OverviewView } from "../components/OverviewView.tsx";
+import { buildOverview } from "../lib/summary.ts";
 import { Icon } from "../components/ui.tsx";
 import { setCurrentRepo } from "../lib/session.ts";
 
-type Tab = "flows" | "map" | "findings";
+type Tab = "overview" | "flows" | "map" | "findings";
 
 export function RepoView({ route, id }: { route: Route; id: string }) {
   const [spec, setSpec] = useState<TraceSpec | undefined>(id === "local" ? getLocalTrace() : undefined);
@@ -34,7 +36,8 @@ export function RepoView({ route, id }: { route: Route; id: string }) {
     if (model) setCurrentRepo(id, entry?.title ?? model.spec.meta.repo.name, model);
   }, [model, entry, id]);
 
-  const tab = (route.query.get("tab") as Tab) || "flows";
+  const tab = (route.query.get("tab") as Tab) || "overview";
+  const tourStop = route.query.get("tour");
   const flowId = route.query.get("flow") ?? undefined;
   const sel = route.query.get("sel") ?? undefined;
   const [selection, setSelection] = useState<string | undefined>(sel);
@@ -93,9 +96,9 @@ export function RepoView({ route, id }: { route: Route; id: string }) {
         left={<button className="btn icon ghost mobile-only" onClick={() => setSidebarOpen(!sidebarOpen)} aria-label="Flows"><Icon name="menu" /></button>}
       >
         <div className="tabs" role="tablist">
-          {(["flows", "map", "findings"] as Tab[]).map((t) => (
+          {(["overview", "flows", "map", "findings"] as Tab[]).map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} className={`tab${tab === t ? " active" : ""}`} onClick={() => set({ tab: t })} data-testid={`tab-${t}`}>
-              {t === "flows" ? "Flows" : t === "map" ? "Map" : "Findings"}
+              {t === "overview" ? "Overview" : t === "flows" ? "Flows" : t === "map" ? "Map" : "Findings"}
               {t === "findings" && model.spec.findings.length > 0 && (
                 <span className="row" style={{ gap: 3 }}>
                   {counts.high > 0 && <span className="sev high" />}
@@ -106,8 +109,8 @@ export function RepoView({ route, id }: { route: Route; id: string }) {
           ))}
         </div>
       </TopBar>
-      <div className={`workspace${tab === "findings" ? " wide" : ""}${tab === "map" ? " map" : ""}`}>
-        <aside className={`sidebar panel${sidebarOpen ? " open" : ""}`} hidden={tab === "map"}>
+      <div className={`workspace${tab === "findings" ? " wide" : ""}${tab === "map" ? " map" : ""}${tab === "overview" ? " solo" : ""}`}>
+        <aside className={`sidebar panel${sidebarOpen ? " open" : ""}`} hidden={tab === "map" || tab === "overview"}>
           <FlowList model={model} activeFlow={tab === "flows" ? flowId : undefined} onOpen={(fid) => {
             setSidebarOpen(false);
             setFocusEdge(undefined);
@@ -123,9 +126,22 @@ export function RepoView({ route, id }: { route: Route; id: string }) {
             : <div className="empty">Pick a flow on the left.</div>)}
           {tab === "map" && <SystemMap model={model} selected={selection} onSelect={select} />}
           {tab === "findings" && <FindingsView model={model} onShowFlow={showFlow} onOpenConcept={setConceptId} />}
-          {entry?.walkthrough && tab === "flows" && <Walkthrough entry={entry} onOpen={(fid) => navigate(["repo", id], { tab: "flows", flow: fid }, false)} />}
+          {tab === "overview" && (
+            <OverviewView model={model} entry={entry} onOpenConcept={setConceptId} onTab={(t) => set({ tab: t })}
+              onOpenFlow={(fid) => {
+                const stops = tourFlows(model, entry);
+                const i = stops.indexOf(fid);
+                setFocusEdge(undefined);
+                navigate(["repo", id], { tab: "flows", flow: fid, tour: i >= 0 ? String(i) : undefined }, false);
+              }} />
+          )}
+          {tab === "flows" && tourStop !== null && flow && (
+            <TourBar stops={tourFlows(model, entry)} index={Number(tourStop)} labelOf={(fid) => model.flows.get(fid)?.label ?? fid}
+              onGo={(i, fid) => navigate(["repo", id], { tab: "flows", flow: fid, tour: String(i) }, false)}
+              onExit={() => navigate(["repo", id], { tab: "overview" }, false)} />
+          )}
         </main>
-        {tab !== "findings" && (
+        {tab !== "findings" && tab !== "overview" && (
           <aside className={`inspector panel${inspectorOpen ? " open" : ""}`}>
             <div className="row mobile-only" style={{ justifyContent: "flex-end", padding: "8px 8px 0" }}>
               <button className="btn icon ghost" onClick={() => setInspectorOpen(false)} aria-label="Close details"><Icon name="close" /></button>
@@ -139,23 +155,23 @@ export function RepoView({ route, id }: { route: Route; id: string }) {
   );
 }
 
-function Walkthrough({ entry, onOpen }: { entry: GalleryEntry; onOpen(flowId: string): void }) {
-  const [open, setOpen] = useState(false);
-  const items = entry.walkthrough ?? [];
-  if (!items.length) return null;
+/** Flow ids of the guided tour: the curated one for gallery repos, otherwise generated. */
+function tourFlows(model: ReturnType<typeof buildModel>, entry?: GalleryEntry): string[] {
+  const curated = entry?.walkthrough?.map((w) => w.flow).filter((f): f is string => !!f && model.flows.has(f));
+  return curated?.length ? curated : buildOverview(model).tour.map((t) => t.flow);
+}
+
+function TourBar({ stops, index, labelOf, onGo, onExit }: { stops: string[]; index: number; labelOf(fid: string): string; onGo(i: number, fid: string): void; onExit(): void }) {
+  if (!stops.length || Number.isNaN(index)) return null;
+  const next = stops[index + 1];
+  const prev = stops[index - 1];
   return (
-    <div style={{ borderTop: "1px solid var(--border)", background: "var(--bg-elev)", padding: "8px 18px" }}>
-      <button className="btn small ghost" onClick={() => setOpen(!open)}>{open ? "Hide" : "Show"} the guided tour ({items.length} stops)</button>
-      {open && (
-        <ol style={{ margin: "6px 0 4px", paddingLeft: 22, display: "grid", gap: 8, fontSize: 13 }}>
-          {items.map((w, i) => (
-            <li key={i}>
-              <b>{w.title}</b> <span className="muted">{w.body}</span>{" "}
-              {w.flow && <button className="chip" onClick={() => onOpen(w.flow!)}>Open</button>}
-            </li>
-          ))}
-        </ol>
-      )}
+    <div className="tour-bar" data-testid="tour-bar">
+      <span className="chip accent">Tour stop {index + 1} of {stops.length}</span>
+      <span className="grow" />
+      {prev && <button className="btn small ghost" onClick={() => onGo(index - 1, prev)}>← {labelOf(prev)}</button>}
+      {next ? <button className="btn small primary" onClick={() => onGo(index + 1, next)} data-testid="tour-next">Next: {labelOf(next)} →</button>
+        : <button className="btn small" onClick={onExit}>Finish the tour</button>}
     </div>
   );
 }

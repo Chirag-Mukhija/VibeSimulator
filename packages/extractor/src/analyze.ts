@@ -415,6 +415,13 @@ class Analyzer {
       } else if (resolved.external) {
         const to = this.externalNode(resolved.external, resolved.external, site.call);
         flow.push(this.addEdge(from, to, base));
+      } else if (!this.clientFiles.has(site.call.getSourceFile())) {
+        // Server-side fetch needs an absolute URL, so this is certainly an outbound call;
+        // only the host is decided at runtime.
+        const owner = site.call.getFirstAncestor((a) => isFunctionLike(a)) as FunctionLike | undefined;
+        const name = owner ? functionName(owner) : undefined;
+        const to = this.externalNode(`runtime-${name ?? "url"}`, undefined, site.call, `External API${name ? ` called by ${name}` : ""} (URL built at runtime)`);
+        flow.push(this.addEdge(from, to, { ...base, props: { ...base.props, runtimeUrl: true } }));
       } else {
         const unknown = this.unknownNode(site.call, `No route in this repo matches ${t.method} ${t.url}.`);
         const edge = this.addEdge(from, unknown, { ...base, confidence: "unresolved" });

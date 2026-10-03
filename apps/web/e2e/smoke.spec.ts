@@ -2,11 +2,11 @@ import { expect, test } from "@playwright/test";
 
 test("home lists the gallery", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByTestId("gallery-card")).toHaveCount(3);
+  await expect(page.getByTestId("gallery-card")).toHaveCount(4);
 });
 
 test("a flow plays hop by hop with code evidence", async ({ page }) => {
-  await page.goto("/#/repo/job-scheduler");
+  await page.goto("/#/repo/job-scheduler?tab=flows");
   await page.getByTestId("flow-item").filter({ hasText: "On \"job:events\" message" }).click();
   await expect(page.getByTestId("flow-title")).toHaveText("On \"job:events\" message");
   await page.getByTestId("play").click(); // pause autoplay
@@ -71,4 +71,24 @@ test("the deep-dive drawer embeds the concept's simulation", async ({ page }) =>
   await page.getByTestId("system-map").getByRole("button", { name: /Postgres/ }).click();
   await page.getByTestId("inspector").getByRole("button", { name: /Connection pooling/ }).click();
   await expect(page.getByTestId("deep-dive").getByTestId("simlab")).toBeVisible();
+});
+
+test("the overview explains the repo and runs the guided tour", async ({ page }) => {
+  await page.goto("/#/repo/job-scheduler");
+  const overview = page.getByTestId("overview");
+  await expect(overview).toContainText("6 HTTP routes across 2 processes");
+  await expect(overview).toContainText("Talking points");
+  await expect(page.getByTestId("tour-stop")).toHaveCount(5);
+  await page.getByTestId("start-tour").click();
+  await expect(page.getByTestId("flow-title")).toHaveText("POST /jobs");
+  await expect(page.getByTestId("tour-bar")).toContainText("Tour stop 1 of 5");
+  await page.getByTestId("tour-next").click();
+  await expect(page.getByTestId("flow-title")).toContainText("Loop: poll");
+  await expect(page.getByTestId("tour-bar")).toContainText("Tour stop 2 of 5");
+});
+
+test("the open-source gallery repo loads", async ({ page }) => {
+  await page.goto("/#/repo/hackathon-starter?tab=flows&flow=flow%3Aroute%3APOST%3A%2Fsignup");
+  await expect(page.getByTestId("flow-title")).toHaveText("POST /signup");
+  await expect(page.locator(".lifeline-head").filter({ hasText: "MongoDB" })).toHaveCount(1);
 });
