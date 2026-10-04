@@ -91,6 +91,11 @@ export interface Branch {
    * Its `else` side, the rest of the function, is the main path and plays by default.
    */
   guard: boolean;
+  /**
+   * The `then` side does its own work and leaves early (`if (existing) { sendLink(); return; }`). The rest of
+   * the function is then the main path, so it plays by default when it does anything.
+   */
+  exits: boolean;
   chosen: "then" | "else";
 }
 
@@ -208,22 +213,21 @@ export function buildScene(model: Model, flow: Flow, opts: SceneOptions): Scene 
 
   const push = (e: Omit<SceneEvent, "index">) => events.push({ index: events.length, ...e });
 
-  // Conditions met along this flow, in order. Guard clauses default to their continuing (main) path.
+  // Conditions met along this flow, in order. Guard clauses and early exits default to their continuing (main) path.
   const branches = new Map<string, Branch>();
   for (const step of flow.steps) {
     const e = model.edges.get(step.edge)!;
     if (e.props.errorPath) continue;
     for (const b of branchPath(e)) {
       const key = branchKey(e.from, b.condition);
-      const known = branches.get(key);
-      const guard = known?.guard || b.guard === true;
-      const entry = known ?? { key, condition: b.condition, owner: model.nodes.get(e.from)!.label, ownerId: e.from, hasElse: false, guard, chosen: "then" as const };
-      entry.guard = guard;
+      const entry = branches.get(key) ?? { key, condition: b.condition, owner: model.nodes.get(e.from)!.label, ownerId: e.from, hasElse: false, guard: false, exits: false, chosen: "then" as const };
+      entry.guard ||= b.guard === true;
+      entry.exits ||= b.exits === true;
       if (b.branch === "else") entry.hasElse = true;
-      entry.chosen = opts.choices?.[key] ?? (entry.guard ? "else" : "then");
       branches.set(key, entry);
     }
   }
+  for (const b of branches.values()) b.chosen = opts.choices?.[b.key] ?? (b.guard || (b.exits && b.hasElse) ? "else" : "then");
   const plays = (e: TraceEdge) => {
     if (e.props.errorPath) return opts.showErrors === true;
     return branchPath(e).every((b) => branches.get(branchKey(e.from, b.condition))?.chosen === b.branch);
@@ -272,8 +276,8 @@ export function buildScene(model: Model, flow: Flow, opts: SceneOptions): Scene 
     }
     const fromDevice = deviceOfNode.get(fromNode.id) ?? resolve(fromNode);
     const from: Endpoint = { device: fromDevice, stage: stageOf(fromNode, fromDevice) };
-    // Borrowing or returning a pooled connection happens inside the process; no packet leaves it.
-    if (edge.props.checkout || edge.props.release) {
+    // Borrowing or returning a pooled connection, or a deliberate wait, happens inside the process; no packet leaves it.
+    if (edge.props.checkout || edge.props.release || edge.from === edge.to) {
       resolve(toNode);
       push({ kind: "local", edge, from, to: from, depth: stack.length });
       continue;

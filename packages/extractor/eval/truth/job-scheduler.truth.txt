@@ -30,6 +30,8 @@ edge $JOBS#@34 -> $QS#listJobs @ api/routes/jobs.js:37
 edge $JOBS#@48 -> $QS#getJobById @ api/routes/jobs.js:50
 edge $JOBS#@62 -> $QS#retryJob @ api/routes/jobs.js:64
 edge fn:api/routes/stats.js#@8 -> $DB @ api/routes/stats.js:10
+# worker presence comes from a Map in the API process's memory (broadcast.js), no I/O but it matters with two instances
+edge fn:api/routes/stats.js#@8 -> fn:api/ws/broadcast.js#listWorkers @ api/routes/stats.js:16
 
 # ---- queueService (shared by api and worker)
 edge $QS#enqueueJob -> $DB @ api/services/queueService.js:11
@@ -73,6 +75,8 @@ edge fn:worker/index.js#@36 -> $PUB @ worker/index.js:37
 
 # ---- pub/sub -> websocket push (api process)
 edge $TOPIC -> fn:api/server.js#@42 @ api/server.js:42
+# a worker:heartbeat message updates the in-memory Map of last-seen times
+edge fn:api/server.js#@42 -> fn:api/ws/broadcast.js#recordHeartbeat @ api/server.js:46
 edge fn:api/server.js#@42 -> fn:api/ws/broadcast.js#broadcast @ api/server.js:49
 edge fn:api/ws/broadcast.js#broadcast -> ws:/ @ api/ws/broadcast.js:18
 edge ws:/ -> fn:api/server.js#@33 @ api/server.js:33

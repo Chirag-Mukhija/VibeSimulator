@@ -1,0 +1,152 @@
+{
+ "flows": [
+  {
+   "id": "flow:route:POST:/payments",
+   "summary": "After logging and JSON parsing, auth looks up the merchant by the x-api-key header and returns 401 if the header is missing or matches no merchant. The controller returns 400 unless idempotency_key is a string and amount is a positive number. If the merchant already has a payment with that key, it returns 201 with that stored row plus an X-Idempotent-Replay: true header. Otherwise it opens a transaction on one pooled client, inserts a payments row (status defaults to INITIATED) and a payment_events row (NULL -> INITIATED), commits and returns 201; a unique-key clash becomes 409 and any other error becomes 500. Surprising: no bank or processor is ever called, so the payment stays INITIATED and no money moves.",
+   "evidence": [
+    "src/middleware/auth.js:10",
+    "src/middleware/auth.js:21",
+    "src/controllers/paymentController.js:10",
+    "src/controllers/paymentController.js:13",
+    "src/controllers/paymentController.js:18",
+    "src/controllers/paymentController.js:19",
+    "src/services/paymentService.js:16",
+    "src/services/paymentService.js:19",
+    "src/services/paymentService.js:22",
+    "src/services/paymentService.js:32",
+    "src/services/paymentService.js:37",
+    "db/schema.sql:31",
+    "src/services/paymentService.js:50",
+    "src/middleware/errorHandler.js:11"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/payments/:id",
+   "summary": "After the same api-key auth (401 on failure), the service fetches the payment by id AND the caller's merchant_id, so another merchant's payment gets the same 404 as one that does not exist. If found, a second query loads that payment's status history from payment_events, oldest first, and the response is 200 with the payment row plus an events array. Surprising: an id that is not a valid UUID makes Postgres throw, and the client gets a 500 instead of a 404.",
+   "evidence": [
+    "src/controllers/paymentController.js:32",
+    "src/controllers/paymentController.js:34",
+    "src/services/paymentService.js:61",
+    "src/services/paymentService.js:68",
+    "src/services/paymentService.js:72",
+    "src/controllers/paymentController.js:36",
+    "db/schema.sql:21"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/payments",
+   "summary": "After api-key auth (401 on failure), the controller reads ?limit (default 20, max 100) and ?offset (default 0). It returns the merchant's payments newest first using LIMIT/OFFSET, which the (merchant_id, created_at DESC) index supports, as 200 {payments, limit, offset} with no total count. Surprising: limit=0 quietly becomes 20, and a negative limit or offset is passed to Postgres unchanged, which rejects it, so the client gets a 500.",
+   "evidence": [
+    "src/controllers/paymentController.js:40",
+    "src/controllers/paymentController.js:41",
+    "src/services/paymentService.js:79",
+    "src/services/paymentService.js:80",
+    "src/controllers/paymentController.js:44",
+    "db/schema.sql:57"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/health",
+   "summary": "Registered directly on the app before the /payments router, so it needs no API key (auth applies only inside that router). It runs through the request logger and JSON parser and always returns 200 {\"status\":\"ok\"}. It never touches Postgres, so it still reports healthy when the database is down.",
+   "evidence": [
+    "src/app.js:8",
+    "src/app.js:12",
+    "src/app.js:13",
+    "src/app.js:16",
+    "src/routes/payments.js:11"
+   ]
+  }
+ ],
+ "insights": [
+  {
+   "title": "Idempotent replay ignores a changed request body",
+   "explanation": "A replay is matched only on (merchant_id, idempotency_key). If a client reuses a key with a different amount, it gets back the original payment with 201 and X-Idempotent-Replay, and the new amount is silently dropped. Payment APIs usually reject a key reused with different parameters, because a silent mismatch hides client bugs.",
+   "severity": "medium",
+   "evidence": [
+    "src/controllers/paymentController.js:7",
+    "src/controllers/paymentController.js:16",
+    "src/controllers/paymentController.js:19",
+    "src/services/paymentService.js:5"
+   ]
+  },
+  {
+   "title": "A duplicate key gets 201 or 409 depending on timing, and the docs say otherwise",
+   "explanation": "A retry that arrives after the first request has committed gets a 201 replay. A retry that races past the pre-check fails on the UNIQUE constraint and gets a 409 error instead. So the same logical retry gets two different response contracts. DECISIONS.md says the pre-check gives a fast 409 for repeated requests, but the code returns 201 there.",
+   "severity": "low",
+   "evidence": [
+    "src/controllers/paymentController.js:19",
+    "src/services/paymentService.js:48",
+    "src/services/paymentService.js:50",
+    "DECISIONS.md:195",
+    "DECISIONS.md:196"
+   ]
+  },
+  {
+   "title": "Bad path ids become 500s that leak Postgres error text",
+   "explanation": "payments.id is a UUID, and req.params.id goes to Postgres unchecked. Something like /payments/abc makes Postgres throw an invalid-UUID error, which reaches errorHandler without a status, so the client gets a 500 instead of a 400 or 404. errorHandler also returns err.message as-is for every 500, which exposes internal database messages to API clients.",
+   "severity": "medium",
+   "evidence": [
+    "db/schema.sql:21",
+    "src/controllers/paymentController.js:32",
+    "src/services/paymentService.js:61",
+    "src/middleware/errorHandler.js:11",
+    "src/middleware/errorHandler.js:13"
+   ]
+  },
+  {
+   "title": "POST without a JSON body crashes with a 500",
+   "explanation": "The app uses Express 5, where req.body stays undefined unless a body parser actually parsed a body. A POST /payments with no body, or without Content-Type: application/json, makes the destructuring of req.body throw a TypeError. That surfaces as a 500 instead of the intended 400 validation error.",
+   "severity": "medium",
+   "evidence": [
+    "package.json:18",
+    "src/app.js:9",
+    "src/controllers/paymentController.js:7"
+   ]
+  },
+  {
+   "title": "JS-number validation does not match DECIMAL(12,2)",
+   "explanation": "The controller accepts any positive JS number, but the column is DECIMAL(12,2). Postgres silently rounds extra decimals (10.005 is stored as 10.01). A value like 0.001 rounds to 0.00 and then fails the positive_amount CHECK, and values of 10^10 or more overflow; both of these return 500. pg also returns NUMERIC as a string, so a client that sends amount as a number gets it back as a string.",
+   "severity": "medium",
+   "evidence": [
+    "src/controllers/paymentController.js:12",
+    "db/schema.sql:28",
+    "db/schema.sql:38",
+    "src/services/paymentService.js:24",
+    "src/controllers/paymentController.js:28"
+   ]
+  },
+  {
+   "title": "Offset pagination is fragile",
+   "explanation": "Negative limit or offset values pass straight through parseInt to Postgres, which rejects them, so the client gets a 500. Rows are ordered only by created_at with no unique tiebreaker such as id, and pages are offset-based. Payments created while a client is paging shift rows between pages, so items can be duplicated or skipped, and deep offsets still make Postgres scan past every skipped row.",
+   "severity": "low",
+   "evidence": [
+    "src/controllers/paymentController.js:40",
+    "src/controllers/paymentController.js:41",
+    "src/services/paymentService.js:79",
+    "src/services/paymentService.js:80"
+   ]
+  },
+  {
+   "title": "Pool exhaustion makes requests hang instead of failing fast",
+   "explanation": "The pool sets only max: 20 and no connectionTimeoutMillis, so pg waits forever for a free connection. Each POST takes a connection three separate times (auth lookup, idempotency SELECT, then a dedicated client held through BEGIN, two INSERTs and COMMIT). Above roughly 20 concurrent DB operations, requests queue inside Node with no timeout. Running several Node instances also multiplies the connection count against Postgres's own limit.",
+   "severity": "medium",
+   "evidence": [
+    "src/config/db.js:4",
+    "src/config/db.js:6",
+    "src/middleware/auth.js:15",
+    "src/services/paymentService.js:4",
+    "src/services/paymentService.js:16",
+    "src/services/paymentService.js:55"
+   ]
+  },
+  {
+   "title": "Merchant API keys are stored in plaintext",
+   "explanation": "api_key is stored as raw hex text, and auth looks merchants up by comparing it directly. Anyone who can read the merchants table (a database dump, a backup, a read-only SQL injection elsewhere) gets working credentials for every merchant. The usual design stores only a hash of the key and looks up by the hash.",
+   "severity": "medium",
+   "evidence": [
+    "db/schema.sql:13",
+    "src/middleware/auth.js:16"
+   ]
+  }
+ ]
+}

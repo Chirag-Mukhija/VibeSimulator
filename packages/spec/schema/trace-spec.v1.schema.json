@@ -744,6 +744,211 @@
         ],
         "additionalProperties": false
       }
+    },
+    "notes": {
+      "type": "object",
+      "properties": {
+        "generator": {
+          "type": "object",
+          "properties": {
+            "tool": {
+              "type": "string",
+              "minLength": 1
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "generatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+            },
+            "reviewed": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "tool",
+            "generatedAt"
+          ],
+          "additionalProperties": false
+        },
+        "flows": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "flow": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^\\S+$"
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1200
+              },
+              "evidence": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "file": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "line": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "endLine": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "snippet": {
+                      "type": "string",
+                      "maxLength": 500
+                    },
+                    "context": {
+                      "type": "object",
+                      "properties": {
+                        "startLine": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "lines": {
+                          "maxItems": 24,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 400
+                          }
+                        }
+                      },
+                      "required": [
+                        "startLine",
+                        "lines"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "file",
+                    "line"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "flow",
+              "summary"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "insights": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "explanation": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1500
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "evidence": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "file": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "line": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "endLine": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "snippet": {
+                      "type": "string",
+                      "maxLength": 500
+                    },
+                    "context": {
+                      "type": "object",
+                      "properties": {
+                        "startLine": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "lines": {
+                          "maxItems": 24,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 400
+                          }
+                        }
+                      },
+                      "required": [
+                        "startLine",
+                        "lines"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "file",
+                    "line"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "title",
+              "explanation",
+              "severity",
+              "evidence"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "generator"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [

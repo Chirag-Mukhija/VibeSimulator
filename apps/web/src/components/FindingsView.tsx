@@ -3,6 +3,7 @@ import type { Model, Severity } from "../lib/model.ts";
 import { flowsTouching } from "../lib/model.ts";
 import { FindingCard } from "./Inspector.tsx";
 import { CodeBlock } from "./CodeBlock.tsx";
+import { AiInsights } from "./AiNotes.tsx";
 
 const LEVELS: Severity[] = ["high", "medium", "low"];
 
@@ -50,6 +51,7 @@ export function FindingsView({ model, onShowFlow, onOpenConcept }: { model: Mode
             </div>
           );
         })}
+        {model.spec.notes && <AiInsights notes={model.spec.notes} />}
       </div>
     </div>
   );

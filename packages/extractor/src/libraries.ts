@@ -1,5 +1,5 @@
 import { Node, type CallExpression, type NewExpression } from "ts-morph";
-import type { Handle, HandleType, LibraryHooks, Resolver, Value } from "./values.ts";
+import type { FunctionLike, Handle, HandleType, LibraryHooks, Resolver, Value } from "./values.ts";
 import { isFunctionLike, pick, UNKNOWN } from "./values.ts";
 import { summarizeSql } from "./sql.ts";
 import { checkQuery } from "./sqlschema.ts";
@@ -206,6 +206,8 @@ export const hooks: LibraryHooks = {
     if ((h.type === "ws-server" || h.type === "sio-server") && method === "on" && event === "connection" && paramIndex === 0) {
       return { kind: "handle", handle: socketOf(r, h) };
     }
+    // User.findOne(...).then((user) => ...): the callback gets the document.
+    if (h.type === "mongoose-doc" && method === "then" && paramIndex === 0) return { kind: "handle", handle: h };
     const isExpress = h.type === "express-app" || h.type === "express-router";
     if (isExpress && (HTTP_METHODS.has(method ?? "") || method === "use")) {
       if (paramIndex === 0) return { kind: "handle", handle: r.handle("express-req", () => mk("express-req", "express", call, {})) };
@@ -250,6 +252,27 @@ function schemaFunction(r: Resolver, model: Handle, kind: "methods" | "statics",
   return undefined;
 }
 
+/** `schema.pre('save', fn)`: functions Mongoose runs before every save of the model built from that schema. */
+export function schemaHooks(r: Resolver, model: Handle, event: string): FunctionLike[] {
+  const schemaNode = model.data.schema as Node | undefined;
+  const schemaDecl = schemaNode && Node.isIdentifier(schemaNode) ? r.declarationOf(schemaNode) : undefined;
+  if (!schemaDecl) return [];
+  const out: FunctionLike[] = [];
+  for (const file of r.repo.files) {
+    file.forEachDescendant((n) => {
+      if (!Node.isCallExpression(n)) return;
+      const callee = n.getExpression();
+      if (!Node.isPropertyAccessExpression(callee) || callee.getName() !== "pre") return;
+      const base = callee.getExpression();
+      if (!Node.isIdentifier(base) || r.declarationOf(base) !== schemaDecl) return;
+      if (stringArg(r, n, 0) !== event) return;
+      const fn = pick(r.value(n.getArguments()[1]), "function")?.node;
+      if (fn) out.push(fn);
+    });
+  }
+  return out;
+}
+
 /** A middleware produced by a package we have no model for, e.g. express-jwt's `jwt({...})`. */
 export function libraryMiddleware(r: Resolver, call: Node, pkg: string, path: string[]): Handle {
   const name = [pkg, ...path.filter((p) => p !== "default")].join(".");
@@ -276,7 +299,10 @@ function key(node: Node): string {
 const COMPUTE: Record<string, Record<string, "libuv-threadpool" | "event-loop">> = {
   bcrypt: { hash: "libuv-threadpool", compare: "libuv-threadpool", genSalt: "libuv-threadpool", hashSync: "event-loop", compareSync: "event-loop", genSaltSync: "event-loop" },
   bcryptjs: { hash: "event-loop", compare: "event-loop", hashSync: "event-loop", compareSync: "event-loop" },
+  // napi-rs async tasks run on the libuv threadpool, like the C++ bcrypt binding.
+  "@node-rs/bcrypt": { hash: "libuv-threadpool", verify: "libuv-threadpool", compare: "libuv-threadpool", genSalt: "libuv-threadpool", hashSync: "event-loop", verifySync: "event-loop", compareSync: "event-loop" },
   argon2: { hash: "libuv-threadpool", verify: "libuv-threadpool" },
+  "@node-rs/argon2": { hash: "libuv-threadpool", verify: "libuv-threadpool", hashSync: "event-loop", verifySync: "event-loop" },
   crypto: { pbkdf2: "libuv-threadpool", scrypt: "libuv-threadpool", pbkdf2Sync: "event-loop", scryptSync: "event-loop" },
   zlib: { gzip: "libuv-threadpool", deflate: "libuv-threadpool", brotliCompress: "libuv-threadpool", gzipSync: "event-loop", deflateSync: "event-loop", brotliCompressSync: "event-loop" },
   sharp: { "": "libuv-threadpool" },
@@ -619,7 +645,7 @@ function hasTimeout(r: Resolver, args: Node[]): boolean {
 
 /** bcrypt.hash(plain, rounds): the work factor, when it is a constant. */
 function costArg(r: Resolver, pkg: string, fn: string, args: Node[]): number | undefined {
-  if ((pkg === "bcrypt" || pkg === "bcryptjs") && fn.startsWith("hash") && args[1]) return numericValue(r, args[1]);
+  if ((pkg === "bcrypt" || pkg === "bcryptjs" || pkg === "@node-rs/bcrypt") && fn.startsWith("hash") && args[1]) return numericValue(r, args[1]);
   return undefined;
 }
 

@@ -5,7 +5,7 @@ import { validateTraceSpec, type TraceSpec } from "@vibesim/spec";
 import { runFindings } from "@vibesim/findings";
 import { loadRepo, relPath, isInlineScript, type Repo } from "./project.ts";
 import { Resolver, isFunctionLike, pick, type FunctionLike, type Handle, type Value } from "./values.ts";
-import { hooks, classifyOp, stringValue, numericValue, type Op, type Target } from "./libraries.ts";
+import { hooks, classifyOp, schemaHooks, stringValue, numericValue, type Op, type Target } from "./libraries.ts";
 import { callSites, forwardedCall, functionKeyName, functionName, moduleLabel, enclosingFunction, responsesOf, type CallSite } from "./functions.ts";
 import { extractExpressRoutes, type Route, type ChainElement } from "./express.ts";
 import { readInfra, type Infra } from "./infra.ts";
@@ -26,13 +26,15 @@ type Owner = FunctionLike | SourceFile;
 
 type Step =
   | { kind: "op"; op: Op; site: CallSite }
-  | { kind: "call"; fn: FunctionLike; site: CallSite; rpc?: boolean }
+  | { kind: "call"; fn: FunctionLike; site: CallSite; rpc?: boolean; hook?: string }
   /** Calls a function received as a parameter; resolved per caller when expanded in a flow. */
   | { kind: "param"; index: number; fns: FunctionLike[]; site: CallSite }
   | { kind: "dispatch"; fns: FunctionLike[]; site: CallSite }
   /** `passport.authenticate('local', cb)(req, res, next)` inside a handler. */
   | { kind: "passport"; call: CallExpression; site: CallSite }
-  | { kind: "unresolved"; site: CallSite; reason: string };
+  | { kind: "unresolved"; site: CallSite; reason: string }
+  /** `await new Promise((r) => setTimeout(r, ms))` and friends: the code deliberately waits. */
+  | { kind: "sleep"; ms: number | undefined; site: CallSite };
 
 interface Ev { file: string; line: number; endLine?: number; snippet?: string; context?: { startLine: number; lines: string[] } }
 interface NodeOut {
@@ -308,7 +310,14 @@ class Analyzer {
     for (const site of callSites(owner)) {
       const op = classifyOp(this.r, site.call) ?? this.reqUserWrite(site.call);
       if (op) {
+        // Mongoose runs the schema's pre('save') hooks (often a bcrypt hash) before the write.
+        for (const fn of this.saveHooks(op, site.call)) out.push({ kind: "call", fn, site, hook: "pre('save')" });
         out.push({ kind: "op", op, site });
+        continue;
+      }
+      const sleep = this.sleepOf(site.call);
+      if (sleep && site.awaited !== false) {
+        out.push({ kind: "sleep", ms: sleep.ms, site });
         continue;
       }
       if (!Node.isCallExpression(site.call)) continue;
@@ -341,6 +350,42 @@ class Analyzer {
   }
 
   /**
+   * A deliberate pause: `new Promise((resolve) => setTimeout(resolve, ms))`, `setTimeout(ms)` from
+   * timers/promises, or a call to a helper whose whole job is one of those (`sleep(5000)`).
+   */
+  private sleepOf(call: CallExpression | NewExpression): { ms: number | undefined } | undefined {
+    const msOf = (n: Node | undefined) => (n ? numericValue(this.r, n) : undefined);
+    if (Node.isNewExpression(call)) {
+      if (call.getExpression().getText() !== "Promise") return undefined;
+      const executor = call.getArguments()[0];
+      if (!executor || !isFunctionLike(executor)) return undefined;
+      const resolve = executor.getParameters()[0]?.getText();
+      if (!resolve) return undefined;
+      let ms: number | undefined;
+      let found = false;
+      executor.forEachDescendant((n, t) => {
+        if (!Node.isCallExpression(n) || !/^(window\.|global\.)?setTimeout$/.test(n.getExpression().getText())) return;
+        const [cb, delay] = n.getArguments();
+        if (cb?.getText() !== resolve && !(cb && isFunctionLike(cb) && cb.getText().includes(`${resolve}(`))) return;
+        found = true;
+        ms = msOf(delay);
+        t.stop();
+      });
+      return found ? { ms } : undefined;
+    }
+    const v = this.r.value(call.getExpression());
+    if (v.kind === "external" && v.pkg === "timers/promises" && v.path.join(".") === "setTimeout") return { ms: msOf(call.getArguments()[0]) };
+    // sleep(ms): a user function that only builds such a promise; the delay comes from this call.
+    const fn = pick(v, "function")?.node;
+    if (!fn || !this.isUserCode(fn)) return undefined;
+    const sites = callSites(fn);
+    if (sites.length === 0 || sites.length > 2 || !sites.some((x) => this.sleepOf(x.call))) return undefined;
+    const param = fn.getParameters()[0]?.getText();
+    const inner = sites.map((x) => this.sleepOf(x.call)).find(Boolean)!;
+    return { ms: inner.ms ?? (param ? msOf(call.getArguments()[0]) : undefined) };
+  }
+
+  /**
    * `req.user.save()` (or `const { user } = req; user.save()`): with Passport, req.user is the document
    * deserializeUser loaded, so this writes to that model's collection.
    */
@@ -353,6 +398,21 @@ class Analyzer {
     if (!model) return undefined;
     const name = String(model.data.model ?? "document");
     return { target: { type: "resource", handle: model.root }, protocol: "mongodb", lifecycle: "pooled", mode: "sync", label: `${callee.getName()} ${name} (req.user)`, props: { reqUser: true } };
+  }
+
+  /**
+   * pre('save') hooks that run before a Mongoose `doc.save()` or `Model.create()`. A hook that starts with
+   * `if (!this.isModified('password')) return` is left out when this code never sets that field: it returns at once.
+   */
+  private saveHooks(op: Op, call: CallExpression | NewExpression): FunctionLike[] {
+    const t = op.target;
+    if (op.protocol !== "mongodb" || t.type !== "resource" || t.handle.type !== "mongoose-model") return [];
+    if (!/^(save|create) /.test(op.label)) return [];
+    return schemaHooks(this.r, t.handle, "save").filter((f) => {
+      if (!this.isUserCode(f)) return false;
+      const field = modifiedGuard(f);
+      return !field || setsField(call, field);
+    });
   }
 
   /** The Mongoose model deserializeUser loads users from, if any. */
@@ -394,7 +454,7 @@ class Analyzer {
     discover(owner);
     const local = new Map<Owner, boolean>();
     const get = (o: Owner) => this.sig.get(o) ?? local.get(o) ?? false;
-    for (const o of order) local.set(o, this.stepsOf(o).some((s) => s.kind === "op" || s.kind === "unresolved" || s.kind === "dispatch" || s.kind === "passport"));
+    for (const o of order) local.set(o, this.stepsOf(o).some((s) => s.kind === "op" || s.kind === "unresolved" || s.kind === "dispatch" || s.kind === "passport" || s.kind === "sleep") || this.touchesMemory(o));
     for (let changed = true; changed; ) {
       changed = false;
       for (const o of order) {
@@ -407,6 +467,13 @@ class Analyzer {
     }
     for (const [o, v] of local) this.sig.set(o, v);
     return this.sig.get(owner) ?? false;
+  }
+
+  /** Reads or changes state kept in this server process's memory: it matters once there are two instances. */
+  private touchesMemory(o: Owner): boolean {
+    if (!isFunctionLike(o) || this.clientFiles.has(o.getSourceFile())) return false;
+    const p = moduleStateProps(this.r, o);
+    return !!(p.mutatesModuleState || p.readsModuleState);
   }
 
   /** A client component calling a "use server" function crosses the network. */
@@ -448,9 +515,11 @@ class Analyzer {
             props: { ...ctx, serverAction: true },
           }));
         } else {
-          // Calling an async function without awaiting it starts it and moves on.
+          // Calling an async function without awaiting it starts it and moves on; a plain function just runs.
           const fireAndForget = step.site.awaited === false && returnsPromise(step.fn);
-          flow.push(this.inProcess(nodeId, callee, step.site.call, ctx, undefined, fireAndForget ? "async" : "sync"));
+          const props: Record<string, unknown> = { ...ctx, ...(step.hook ? { hook: step.hook } : {}) };
+          if (!fireAndForget) delete props.notAwaited;
+          flow.push(this.inProcess(nodeId, callee, step.site.call, props, step.hook ? `${step.hook} hook runs before the write` : undefined, fireAndForget ? "async" : "sync"));
         }
         this.expand(flow, step.fn, callee, step.site.call);
       } else if (step.kind === "param") {
@@ -475,6 +544,9 @@ class Analyzer {
         }
       } else if (step.kind === "passport") {
         this.passportStrategyEdges(flow, step.call, nodeId, undefined, ctx);
+      } else if (step.kind === "sleep") {
+        const label = step.ms !== undefined ? `waits ${step.ms >= 1000 ? `${+(step.ms / 1000).toFixed(1)} s` : `${step.ms} ms`} on purpose (setTimeout)` : "waits on purpose (setTimeout)";
+        flow.push(this.addEdge(nodeId, nodeId, { protocol: "in-process", lifecycle: "none", mode: "sync", at: step.site.call, label, props: { ...ctx, sleep: true, ...(step.ms !== undefined ? { sleepMs: step.ms } : {}) } }));
       } else {
         const unknown = this.unknownNode(step.site.call, step.reason);
         const edge = this.addEdge(nodeId, unknown, { protocol: "unknown", lifecycle: "unknown", mode: "sync", at: step.site.call, confidence: "unresolved", props: ctx });
@@ -1323,7 +1395,40 @@ function moduleStateProps(r: Resolver, fn: FunctionLike): Record<string, unknown
       if (name) names.add(name);
     }
   });
-  return names.size ? { mutatesModuleState: [...names] } : {};
+  // Reads of module-level state that code in its file changes (a Map of workers, a counter); constants don't count.
+  const reads = new Set<string>();
+  body.forEachDescendant((n) => {
+    if (!Node.isIdentifier(n)) return;
+    const name = moduleLevel(n);
+    const d = name ? r.declarationOf(n) : undefined;
+    if (name && !names.has(name) && d && Node.isVariableDeclaration(d) && mutatedInFile(r, d)) reads.add(name);
+  });
+  return { ...(names.size ? { mutatesModuleState: [...names] } : {}), ...(reads.size ? { readsModuleState: [...reads] } : {}) };
+}
+
+const mutated = new WeakMap<Node, boolean>();
+
+/** Whether any function in the declaring file changes this module-level variable. */
+function mutatedInFile(r: Resolver, d: Node): boolean {
+  const known = mutated.get(d);
+  if (known !== undefined) return known;
+  const isIt = (n: Node) => Node.isIdentifier(n) && r.declarationOf(n) === d;
+  let found = false;
+  d.getSourceFile().forEachDescendant((n, t) => {
+    if (Node.isCallExpression(n)) {
+      const callee = n.getExpression();
+      found = Node.isPropertyAccessExpression(callee) && /^(set|add|push|delete|clear|unshift|splice|pop|shift)$/.test(callee.getName()) && isIt(callee.getExpression());
+    } else if (Node.isBinaryExpression(n) && /^(=|\+=|-=)$/.test(n.getOperatorToken().getText())) {
+      const left = n.getLeft();
+      found = isIt(Node.isPropertyAccessExpression(left) || Node.isElementAccessExpression(left) ? left.getExpression() : left);
+    } else if (Node.isPostfixUnaryExpression(n) || Node.isPrefixUnaryExpression(n)) {
+      found = /\+\+|--/.test(n.getText()) && isIt(n.getOperand());
+    }
+    if (found && !n.getFirstAncestor((a) => isFunctionLike(a))) found = false;
+    if (found) t.stop();
+  });
+  mutated.set(d, found);
+  return found;
 }
 
 /** Index of `owner`'s own parameter that `callee` names, or -1. */
@@ -1343,6 +1448,51 @@ function isServerAction(fn: FunctionLike): boolean {
   if (hasUseServer(fn.getSourceFile().getStatements())) return true;
   const body = fn.getBody();
   return !!body && Node.isBlock(body) && hasUseServer(body.getStatements());
+}
+
+/** The field in a hook's opening `if (!this.isModified('field')) return;`, if it has one. */
+function modifiedGuard(fn: FunctionLike): string | undefined {
+  const body = fn.getBody();
+  if (!body || !Node.isBlock(body)) return undefined;
+  for (const st of body.getStatements().slice(0, 3)) {
+    if (!Node.isIfStatement(st)) continue;
+    const cond = st.getExpression();
+    const then = st.getThenStatement();
+    const exits = Node.isReturnStatement(then) || (Node.isBlock(then) && then.getStatements().some((x) => Node.isReturnStatement(x)));
+    if (!exits || !Node.isPrefixUnaryExpression(cond) || cond.getOperatorToken() !== SyntaxKind.ExclamationToken) return undefined;
+    const inner = cond.getOperand();
+    if (!Node.isCallExpression(inner)) return undefined;
+    const callee = inner.getExpression();
+    const arg = inner.getArguments()[0];
+    if (!Node.isPropertyAccessExpression(callee) || callee.getName() !== "isModified" || !arg || !Node.isStringLiteral(arg)) return undefined;
+    return arg.getLiteralText();
+  }
+  return undefined;
+}
+
+/**
+ * Whether the code that saves sets `field` on the document first: `user.password = …`, `new User({ password })`,
+ * or `User.create({ password })`, in the function that makes the call.
+ */
+function setsField(call: CallExpression | NewExpression, field: string): boolean {
+  const hasProp = (obj: Node | undefined) => !!obj && Node.isObjectLiteralExpression(obj) && obj.getProperties().some((p) =>
+    (Node.isPropertyAssignment(p) || Node.isShorthandPropertyAssignment(p)) && p.getName() === field);
+  if (!Node.isCallExpression(call)) return true;
+  const callee = call.getExpression();
+  if (!Node.isPropertyAccessExpression(callee)) return true;
+  if (callee.getName() === "create") return hasProp(call.getArguments()[0]);
+  const receiver = callee.getExpression().getText();
+  const scope = call.getFirstAncestor((a) => isFunctionLike(a)) ?? call.getSourceFile();
+  let found = false;
+  scope.forEachDescendant((n, t) => {
+    if (Node.isBinaryExpression(n) && n.getOperatorToken().getKind() === SyntaxKind.EqualsToken && n.getLeft().getText() === `${receiver}.${field}`) found = true;
+    if (Node.isVariableDeclaration(n) && n.getName() === receiver) {
+      const init = n.getInitializer();
+      if (init && Node.isNewExpression(init) && hasProp(init.getArguments()[0])) found = true;
+    }
+    if (found) t.stop();
+  });
+  return found;
 }
 
 function siteProps(site: CallSite): Record<string, unknown> {

@@ -1,0 +1,272 @@
+{
+ "flows": [
+  {
+   "id": "flow:timer:worker/index.js:29",
+   "summary": "The worker handles one job at a time: poll() awaits runOnce() and then re-arms itself with setTimeout, 0 ms if it processed a job and 1000 ms if the queue was empty. runOnce asks Redis for the earliest due id in priority tiers 0-9, flips that Postgres row from 'pending' to 'processing' (attempts + 1) with a guarded UPDATE, and ZREMs the id whether or not the UPDATE matched, looping past stale ids. The handler is picked by job.type; success sets status 'completed' and clears error, while a throw either dead-letters the job ('failed') once attempts >= max_attempts or sets it back to 'pending' with run_at pushed out by exponential backoff and re-adds it to Redis. Every transition publishes on 'job:events', and a scheduled retry is published as 'job:failed' even though the row is 'pending' again.",
+   "evidence": [
+    "worker/index.js:20",
+    "worker/index.js:29",
+    "api/services/queueService.js:53",
+    "api/services/redisQueue.js:21",
+    "api/services/queueService.js:64",
+    "api/services/queueService.js:69",
+    "worker/jobRunner.js:12",
+    "api/services/queueService.js:87",
+    "api/services/queueService.js:100",
+    "api/services/queueService.js:119",
+    "api/services/queueService.js:127",
+    "api/services/queueService.js:128"
+   ]
+  },
+  {
+   "id": "flow:ui:api/public/dashboard.html#load",
+   "summary": "On load the page fetches GET /jobs?limit=20 (newest 20 rows, ORDER BY id DESC) and GET /stats in parallel and renders the job table, per-status counts and worker list. loadInitial is not awaited, so the page opens a WebSocket to ws://<same host> at the same time: a live event that arrives before the GET /jobs answer is overwritten by that older snapshot. On the server side the server only adds the socket to an in-memory Set and removes it on close. After this first fetch the job table is only patched from WebSocket events, and the 2 s auto-reconnect does not call loadInitial again, so job changes missed while disconnected stay stale until a full page reload. The ws:// scheme is hard-coded, so the live connection would be blocked if the page were served over HTTPS.",
+   "evidence": [
+    "api/public/dashboard.html:100",
+    "api/public/dashboard.html:101",
+    "api/services/queueService.js:40",
+    "api/routes/stats.js:16",
+    "api/public/dashboard.html:118",
+    "api/server.js:34",
+    "api/ws/broadcast.js:9",
+    "api/ws/broadcast.js:10",
+    "api/public/dashboard.html:128",
+    "api/public/dashboard.html:136"
+   ]
+  },
+  {
+   "id": "flow:topic:job:events:42",
+   "summary": "The API process subscribes to Redis channel 'job:events' on its own duplicated connection, because a subscribed Redis connection cannot run normal commands. Each message is JSON-parsed; 'worker:heartbeat' messages also update the in-memory last-seen map, and every message (heartbeats included) is sent to every open WebSocket. In the browser, job:* events patch only id, type, status and updated_at of that row (so attempts and priority go stale, or show '-' for jobs created after load), and every message triggers GET /stats to refresh counts and workers. Redis Pub/Sub keeps no history, so events published while the API is down or while a browser is reconnecting are simply lost.",
+   "evidence": [
+    "api/db/redisClient.js:21",
+    "api/server.js:42",
+    "api/server.js:43",
+    "api/server.js:46",
+    "api/server.js:49",
+    "api/ws/broadcast.js:16",
+    "api/public/dashboard.html:136",
+    "api/public/dashboard.html:93",
+    "api/public/dashboard.html:140",
+    "api/routes/stats.js:10",
+    "api/services/events.js:10"
+   ]
+  },
+  {
+   "id": "flow:route:POST:/jobs",
+   "summary": "Validates the body: type must be a non-empty string, maxAttempts a positive integer, priority an integer and delaySeconds a non-negative number, otherwise it returns 400 with an error message. It INSERTs the row with defaults max_attempts 3, priority 0 and run_at = now() + delaySeconds (a missing payload is stored as {}), ZADDs the id into queue:priority:<tier> (tier = priority clamped to 0-9, score = run_at in ms), publishes 'job:created', and returns 201 with the full row. The type is never checked against the registered handlers (only send_email and resize_image exist), so any string is accepted and only fails later in the worker.",
+   "evidence": [
+    "api/routes/jobs.js:11",
+    "api/routes/jobs.js:15",
+    "api/routes/jobs.js:19",
+    "api/routes/jobs.js:23",
+    "api/routes/jobs.js:27",
+    "api/services/queueService.js:13",
+    "api/services/redisQueue.js:7",
+    "api/services/redisQueue.js:12",
+    "api/services/queueService.js:21",
+    "api/routes/jobs.js:28",
+    "worker/handlers/index.js:3"
+   ]
+  },
+  {
+   "id": "flow:route:POST:/jobs/:id/retry",
+   "summary": "This is the manual dead-letter recovery path: one UPDATE resets status to 'pending', attempts to 0, clears error and sets run_at = now(), but only WHERE status = 'failed'. If no row matches (unknown id, or a job that is pending, processing or completed) it returns 404 'no dead-lettered job with this id'; otherwise it ZADDs the job back into its Redis tier, publishes the event as 'job:created' (there is no separate retried event) and returns 200 with the row. Because of the status guard, jobs stuck in 'processing' cannot be recovered through this endpoint.",
+   "evidence": [
+    "api/services/queueService.js:136",
+    "api/services/queueService.js:137",
+    "api/routes/jobs.js:67",
+    "api/services/queueService.js:148",
+    "api/services/queueService.js:149",
+    "api/routes/jobs.js:70"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/jobs",
+   "summary": "Returns 200 with a JSON array of job rows, newest first (ORDER BY id DESC), with an optional ?status= filter and ?limit= (default 50) / ?offset= (default 0) pagination; the query strings are converted with Number() and passed straight to Postgres. There is no upper bound on limit, and an invalid status (not in the job_status enum) or a non-numeric limit makes Postgres reject the query, which the global error handler turns into a 500 instead of a 400.",
+   "evidence": [
+    "api/routes/jobs.js:36",
+    "api/routes/jobs.js:39",
+    "api/services/queueService.js:30",
+    "api/services/queueService.js:33",
+    "api/services/queueService.js:40",
+    "api/db/migrations/001_create_jobs_table.sql:1",
+    "api/server.js:27"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/jobs/:id",
+   "summary": "Looks up one row with SELECT * FROM jobs WHERE id = $1 and returns it with 200, including payload, attempts, max_attempts, run_at and the last error. If no row exists it returns 404 {error: 'job not found'}. A non-numeric id is not validated, so Postgres fails the bigint cast on jobs.id and the client gets a 500 from the global error handler instead of a 404.",
+   "evidence": [
+    "api/services/queueService.js:26",
+    "api/routes/jobs.js:56",
+    "api/routes/jobs.js:53",
+    "api/db/migrations/002_add_retry_columns.sql:1",
+    "api/db/migrations/001_create_jobs_table.sql:4",
+    "api/server.js:27"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/stats",
+   "summary": "Runs SELECT status, count(*) FROM jobs GROUP BY status and returns 200 with {counts, workers}; statuses that have no jobs are simply absent from counts (the dashboard fills them with 0). workers comes from the API process's in-memory heartbeat map, and a worker is reported online if its last heartbeat was within 15 s, computed at request time. That map is never pruned and every worker start gets a fresh random UUID, so restarted workers pile up as 'offline' entries until the API itself restarts.",
+   "evidence": [
+    "api/routes/stats.js:10",
+    "api/routes/stats.js:16",
+    "api/public/dashboard.html:65",
+    "api/ws/broadcast.js:3",
+    "api/ws/broadcast.js:6",
+    "api/ws/broadcast.js:40",
+    "worker/index.js:10"
+   ]
+  },
+  {
+   "id": "flow:timer:api/public/dashboard.html:146",
+   "summary": "Each open dashboard runs setInterval(refreshStats, 5000), which fetches GET /stats and re-renders the queue-depth counts and worker list; it never touches the job table. Because online/offline is computed only when /stats is called, this poll is what eventually flips a worker to 'offline' in the UI when heartbeats stop and no other events arrive (after the 15 s window). refreshStats has no .catch: if the request fails on the network the last values stay on screen, but if /stats answers 500 the counts panel is cleared and the worker list goes stale.",
+   "evidence": [
+    "api/public/dashboard.html:146",
+    "api/public/dashboard.html:111",
+    "api/public/dashboard.html:112",
+    "api/ws/broadcast.js:3",
+    "api/ws/broadcast.js:40"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/dashboard",
+   "summary": "Serves the single static file api/public/dashboard.html with res.sendFile; there is no static-asset directory, build step or authentication. All CSS and JavaScript are inline in that file, and once loaded it starts the page-load flow (GET /jobs, GET /stats, WebSocket) and the 5 s stats poll. express.json runs first for every route but does nothing for a GET without a JSON body.",
+   "evidence": [
+    "api/server.js:21",
+    "api/server.js:22",
+    "api/server.js:17",
+    "api/public/dashboard.html:56",
+    "api/public/dashboard.html:144",
+    "api/public/dashboard.html:146"
+   ]
+  },
+  {
+   "id": "flow:timer:worker/index.js:36",
+   "summary": "Every 5 s each worker publishes {type: 'worker:heartbeat', workerId, at} on 'job:events', where workerId is a random UUID generated at process start. The API records the time in its in-memory map (a worker counts as online for 15 s after a heartbeat) and also forwards the heartbeat to every connected browser. Because it is a separate setInterval it keeps firing while a job is being processed; publish errors are only logged, and the interval is cleared when shutdown begins.",
+   "evidence": [
+    "worker/index.js:9",
+    "worker/index.js:36",
+    "worker/index.js:37",
+    "worker/index.js:10",
+    "api/services/events.js:10",
+    "api/server.js:46",
+    "api/ws/broadcast.js:3",
+    "api/server.js:49",
+    "worker/index.js:38",
+    "worker/index.js:52"
+   ]
+  }
+ ],
+ "insights": [
+  {
+   "title": "Stored XSS on the dashboard via job type, and no auth anywhere",
+   "explanation": "POST /jobs accepts any string as type and the dashboard writes j.type into innerHTML without escaping, both on page load and when a job:created event arrives. A job submitted with a type like <img src=x onerror=...> therefore runs script in every dashboard viewer's browser. Nothing is authenticated: the app mounts only express.json and the routers, and the WebSocket server accepts every connection and streams all events, including job error messages.",
+   "severity": "high",
+   "evidence": [
+    "api/routes/jobs.js:11",
+    "api/public/dashboard.html:91",
+    "api/public/dashboard.html:136",
+    "api/server.js:17",
+    "api/server.js:33",
+    "api/services/queueService.js:112"
+   ]
+  },
+  {
+   "title": "Jobs can be stuck in 'processing' forever",
+   "explanation": "Claiming sets the row to 'processing' and removes the id from Redis before the handler runs; no code ever looks for or resets 'processing' rows, and the manual retry only matches status = 'failed'. A worker killed by SIGKILL/OOM/crash mid-job (only SIGTERM and SIGINT are handled), or a recordFailure call that throws (the error escapes runOnce and poll only logs it), leaves the job stranded. There is also no handler timeout, so a hung handler blocks that worker permanently and graceful shutdown waits on it forever.",
+   "severity": "high",
+   "evidence": [
+    "api/services/queueService.js:63",
+    "api/services/queueService.js:69",
+    "api/services/queueService.js:137",
+    "worker/index.js:67",
+    "worker/jobRunner.js:23",
+    "worker/index.js:21",
+    "worker/jobRunner.js:19",
+    "worker/index.js:55"
+   ]
+  },
+  {
+   "title": "A job that succeeded can be re-run or dead-lettered",
+   "explanation": "completeJob sits in the same try block as the handler, so if it throws after the handler succeeded (for example the 'completed' UPDATE commits but publishEvent to Redis fails), the catch treats it as a handler failure. recordFailure's UPDATEs match only WHERE id = $1 with no status guard, so the already-completed row is flipped back to 'pending' and re-queued (the handler runs again, e.g. a second email) or marked 'failed' if attempts were used up.",
+   "severity": "medium",
+   "evidence": [
+    "worker/jobRunner.js:19",
+    "worker/jobRunner.js:20",
+    "worker/jobRunner.js:23",
+    "api/services/queueService.js:85",
+    "api/services/queueService.js:94",
+    "api/services/queueService.js:106",
+    "api/services/queueService.js:120"
+   ]
+  },
+  {
+   "title": "Claim race: peek is not a pop, and the guard ignores run_at",
+   "explanation": "peekDueJob only reads the head of a tier (ZRANGEBYSCORE LIMIT 1) without removing it, so every idle worker gets the same id and they race on the same row; losers spend an UPDATE and a ZREM and loop. The claim UPDATE checks status = 'pending' but not run_at, and ZREM deletes the id whatever its score. So a worker with a stale peek, if another worker has meanwhile claimed, failed and re-queued that job with backoff, can claim it immediately (skipping the backoff), or, if its UPDATE missed but its ZREM lands after the re-ZADD, delete the new retry entry and leave a 'pending' row no worker will ever see.",
+   "severity": "medium",
+   "evidence": [
+    "api/services/redisQueue.js:21",
+    "api/services/redisQueue.js:22",
+    "api/services/queueService.js:64",
+    "api/services/queueService.js:69",
+    "api/services/redisQueue.js:16",
+    "api/services/queueService.js:127"
+   ]
+  },
+  {
+   "title": "Unknown job types are accepted, retried, or silently 'completed'",
+   "explanation": "POST /jobs only checks that type is a non-empty string, so a typo like 'send_mail' gets 201 and then fails every attempt with 'no handler registered' until it is dead-lettered. Deterministic payload errors such as a missing payload.to take the same retry-with-backoff path and burn all attempts. Because handlers is a plain object indexed with handlers[job.type], the types 'toString' or 'constructor' resolve to inherited Object.prototype functions and the job is marked 'completed' without any real handler running.",
+   "severity": "medium",
+   "evidence": [
+    "api/routes/jobs.js:11",
+    "worker/jobRunner.js:16",
+    "api/services/queueService.js:100",
+    "worker/handlers/sendEmail.js:3",
+    "worker/handlers/index.js:2",
+    "worker/jobRunner.js:12",
+    "worker/jobRunner.js:20"
+   ]
+  },
+  {
+   "title": "Priority is clamped to 10 tiers and strictly ordered",
+   "explanation": "Any integer priority is accepted and stored as-is, but Redis clamps it into tiers 0-9, so priority -50 behaves like 0 and 1000 like 9 while the API and dashboard show the raw number. Lower numbers are more urgent: claimNextJob scans tier 0 first and returns the first due job, so a steady stream of due tier-0 jobs starves the other tiers indefinitely (there is no aging). Inside a tier, order is by run_at only.",
+   "severity": "low",
+   "evidence": [
+    "api/routes/jobs.js:19",
+    "api/services/queueService.js:13",
+    "api/services/redisQueue.js:7",
+    "api/services/queueService.js:53",
+    "api/services/queueService.js:74",
+    "api/services/redisQueue.js:2"
+   ]
+  },
+  {
+   "title": "Retry timing: uncapped, unjittered backoff judged on two clocks",
+   "explanation": "The delay is 5 * 2^(attempts-1) seconds with no cap or jitter, and maxAttempts has no upper bound; with the default max_attempts of 3 a job retries after 5 s and 10 s, but one allowed 20 attempts waits 5 * 2^18 s (about 15 days) after its 19th failure. Jobs that fail together, e.g. during a downstream outage, all retry at the same instant. run_at is computed with Postgres now() and used as the Redis score, but due-ness is judged against the worker's Date.now(), so clock skew between the DB host and worker hosts makes jobs run early or late.",
+   "severity": "low",
+   "evidence": [
+    "api/services/backoff.js:5",
+    "api/routes/jobs.js:15",
+    "api/services/queueService.js:13",
+    "api/services/queueService.js:119",
+    "api/services/redisQueue.js:12",
+    "api/services/redisQueue.js:21"
+   ]
+  },
+  {
+   "title": "Bad input returns 500 instead of 400/404",
+   "explanation": "Route params and query strings go to SQL unvalidated: GET /jobs/abc and POST /jobs/abc/retry fail the bigint cast on jobs.id, GET /jobs?status=done fails the job_status enum, and limit=abc becomes NaN. All of these reach the generic error handler and return 500. limit also has no upper bound, so a single request can pull the whole jobs table.",
+   "severity": "low",
+   "evidence": [
+    "api/db/migrations/001_create_jobs_table.sql:4",
+    "api/db/migrations/001_create_jobs_table.sql:1",
+    "api/routes/jobs.js:39",
+    "api/routes/jobs.js:50",
+    "api/routes/jobs.js:64",
+    "api/server.js:25",
+    "api/services/queueService.js:30"
+   ]
+  }
+ ]
+}

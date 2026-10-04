@@ -9,6 +9,7 @@ import { pathCounts } from "../lib/summary.ts";
 import { SequenceDiagram } from "./SequenceDiagram.tsx";
 import { EventList, PacketTopology } from "./PacketView.tsx";
 import { Icon, KindChip } from "./ui.tsx";
+import { AiFlowSummary } from "./AiNotes.tsx";
 
 export interface ActiveEvent {
   scene: Scene;
@@ -211,6 +212,7 @@ export function FlowStage({ model, flow, selected, focusEdge, onSelect, onEvent 
           </span>
           {flowFindings.size > 0 && <span className="sev-text medium">{flowFindings.size} finding{flowFindings.size === 1 ? "" : "s"} on this path</span>}
         </div>
+        <AiFlowSummary key={flow.id} notes={model.spec.notes} flowId={flow.id} />
       </div>
       {view === "devices" ? (
         <DevicesBody key={flow.id} model={model} scene={scene} focusEdge={focusEdge} selected={selected} onSelect={onSelect} onEvent={onEvent}

@@ -166,7 +166,7 @@
     "stats": {
       "routes": 101,
       "flows": 101,
-      "findings": 32,
+      "findings": 34,
       "high": 3
     }
   }

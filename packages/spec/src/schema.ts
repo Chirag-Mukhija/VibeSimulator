@@ -231,6 +231,36 @@ export const Gap = z.strictObject({
   evidence: z.array(Evidence).min(1),
 });
 
+/**
+ * Optional notes an LLM wrote after reading the code (`vibesim explain`, which runs Claude Code headless with
+ * read-only tools). Not produced by the parser: the viewer always labels them as AI-written. Every citation has
+ * been checked to point at a real file and line.
+ */
+export const AiNotes = z.strictObject({
+  generator: z.strictObject({
+    tool: z.string().min(1),
+    model: z.string().min(1).optional(),
+    generatedAt: z.iso.datetime(),
+    /** How the notes were checked beyond citations, e.g. "independent review against the source". */
+    reviewed: z.string().min(1).optional(),
+  }),
+  /** What a request does start to finish, in plain words, keyed by flow id. */
+  flows: z
+    .array(z.strictObject({ flow: Id, summary: z.string().min(1).max(1200), evidence: z.array(Evidence).default([]) }))
+    .default([]),
+  /** Bugs, risks and design points the rule engine has no rule for. */
+  insights: z
+    .array(
+      z.strictObject({
+        title: z.string().min(1).max(200),
+        explanation: z.string().min(1).max(1500),
+        severity: z.enum(SEVERITIES),
+        evidence: z.array(Evidence).min(1),
+      }),
+    )
+    .default([]),
+});
+
 export const Meta = z.strictObject({
   generatedAt: z.iso.datetime(),
   generator: z.strictObject({
@@ -260,6 +290,7 @@ export const TraceSpec = z
     flows: z.array(Flow).default([]),
     findings: z.array(Finding).default([]),
     gaps: z.array(Gap).default([]),
+    notes: AiNotes.optional(),
   })
   .superRefine(checkReferences);
 
@@ -272,6 +303,7 @@ export type Finding = z.infer<typeof Finding>;
 export type Gap = z.infer<typeof Gap>;
 export type Service = z.infer<typeof Service>;
 export type Meta = z.infer<typeof Meta>;
+export type AiNotes = z.infer<typeof AiNotes>;
 export type TraceSpec = z.infer<typeof TraceSpec>;
 export type TraceSpecInput = z.input<typeof TraceSpec>;
 
@@ -320,6 +352,11 @@ function checkReferences(spec: TraceSpec, ctx: z.RefinementCtx) {
       }
       reached.add(edge.to);
     });
+  });
+
+  const flowIds = new Set(spec.flows.map((f) => f.id));
+  spec.notes?.flows.forEach((note, i) => {
+    if (!flowIds.has(note.flow)) issue(["notes", "flows", i, "flow"], `unknown flow "${note.flow}"`);
   });
 
   spec.findings.forEach((finding, i) => {

@@ -1,0 +1,325 @@
+{
+ "flows": [
+  {
+   "id": "flow:route:POST:/api/auth/refresh",
+   "summary": "Swaps a refresh token, read from the refreshToken cookie or (for mobile clients) the JSON body, for a brand-new access/refresh pair; a missing token returns 401. The JWT is checked with the refresh secret, then the Redis key refresh:<userId>:<jti> must exist. That key is deleted and a new one is written with a fresh random jti and a TTL equal to the refresh expiry (default 7d), so every refresh rotates the session. The reply is 200 with a new httpOnly cookie plus accessToken and refreshToken in the body, but no user object; replaying an old, already-rotated token just gets 401, with no reuse detection that would revoke the user's other sessions.",
+   "evidence": [
+    "src/controllers/auth.controller.js:21",
+    "src/controllers/auth.controller.js:45",
+    "src/services/auth.service.js:51",
+    "src/services/token.service.js:25",
+    "src/services/token.service.js:30",
+    "src/services/token.service.js:19",
+    "src/services/token.service.js:20",
+    "src/config/env.js:33",
+    "src/controllers/auth.controller.js:50",
+    "src/services/auth.service.js:58"
+   ]
+  },
+  {
+   "id": "flow:route:POST:/api/auth/register",
+   "summary": "Creates an account: missing username/email/password returns 400, and an email or username that already exists returns 409 (each checked with its own SELECT). Then the password is hashed with bcrypt at cost 12 and a users row is inserted. The user is logged in straight away: a refresh session is written to Redis and the reply is 200 (not 201) with the user, an access token and a refresh token, plus the refresh token as an httpOnly, SameSite=strict cookie scoped to /api/auth. There is no format or length validation, so a username over 30 characters fails the VARCHAR(30) column and comes back as a 500, not a 400.",
+   "evidence": [
+    "src/controllers/auth.controller.js:25",
+    "src/services/auth.service.js:22",
+    "src/services/auth.service.js:25",
+    "src/utils/password.js:4",
+    "src/services/user.service.js:43",
+    "src/services/auth.service.js:15",
+    "src/controllers/auth.controller.js:17",
+    "src/controllers/auth.controller.js:18",
+    "src/controllers/auth.controller.js:8",
+    "src/controllers/auth.controller.js:10",
+    "src/controllers/auth.controller.js:11",
+    "src/db/migrations/001_create_users_table.sql:5",
+    "src/middlewares/error.middleware.js:3"
+   ]
+  },
+  {
+   "id": "flow:route:PATCH:/api/users/me",
+   "summary": "Updates the caller's own profile; authGuard rejects a missing or invalid Bearer access token with 401. If avatarUrl is sent it must start with the app's S3 public base URL, otherwise 400, which also means an avatar cannot be cleared by sending null; fullName, bio and website are not checked at all. The UPDATE sets only the fields that were sent plus updated_at = now() (if nothing was sent it just re-reads the user), and the reply is 200 with the public profile and live post/follower/following counts, but not the email that GET /api/users/me includes. A bio over 150 characters breaks the column limit and comes back as a 500.",
+   "evidence": [
+    "src/middlewares/auth.middleware.js:6",
+    "src/controllers/profile.controller.js:18",
+    "src/services/upload.service.js:52",
+    "src/services/user.service.js:65",
+    "src/services/user.service.js:75",
+    "src/services/user.service.js:71",
+    "src/services/profile.service.js:49",
+    "src/services/profile.service.js:14",
+    "src/services/profile.service.js:43",
+    "src/db/migrations/002_add_profile_fields_to_users.sql:3"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/api/users/:username",
+   "summary": "Public profile lookup; no token needed. It loads the user by an exact, case-sensitive username match and returns 404 if there is none. It then runs three COUNT(*) queries in parallel (posts, followers, following) and returns 200 with a profile that leaves out email and password_hash; the counts are recomputed on every request instead of being stored. Because GET /me is registered before /:username, a user whose username is literally 'me' can never be viewed through this route.",
+   "evidence": [
+    "src/routes/profile.routes.js:13",
+    "src/services/user.service.js:33",
+    "src/services/profile.service.js:36",
+    "src/services/profile.service.js:14",
+    "src/services/profile.service.js:20",
+    "src/routes/profile.routes.js:11"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/api/users/me",
+   "summary": "Returns the logged-in user's own profile. authGuard verifies the Bearer access token and sets req.userId from its sub claim, or returns 401. The user is loaded by id (404 if the account no longer exists), the same three live counts run in parallel, and the reply is the public profile plus email. This is a separate endpoint from GET /api/auth/me, which returns only id, username, email and createdAt.",
+   "evidence": [
+    "src/middlewares/auth.middleware.js:14",
+    "src/services/profile.service.js:41",
+    "src/services/profile.service.js:42",
+    "src/services/profile.service.js:43",
+    "src/routes/auth.routes.js:15",
+    "src/controllers/auth.controller.js:66"
+   ]
+  },
+  {
+   "id": "flow:route:POST:/api/auth/login",
+   "summary": "Logs in with email and password. Missing fields return 400, then the user is looked up by exact email match. An unknown email and a wrong password both return 401 'Invalid credentials', but an unknown email returns before bcrypt runs, so it answers noticeably faster. On success a new refresh session is written to Redis and the reply is 200 with the user, an access token (15m by default), a refresh token and the httpOnly refresh cookie; each IP gets 20 auth requests per 15 minutes, counted in Redis, behind nginx's own 10 r/s per-IP limit.",
+   "evidence": [
+    "src/controllers/auth.controller.js:35",
+    "src/services/user.service.js:28",
+    "src/services/auth.service.js:38",
+    "src/services/auth.service.js:40",
+    "src/services/auth.service.js:41",
+    "src/services/token.service.js:20",
+    "src/config/env.js:31",
+    "src/controllers/auth.controller.js:17",
+    "src/middlewares/rateLimit.middleware.js:8",
+    "src/middlewares/rateLimit.middleware.js:9",
+    "nginx.conf:8"
+   ]
+  },
+  {
+   "id": "flow:route:POST:/api/posts",
+   "summary": "Creates a post for the logged-in user. imageUrl is required and must start with the app's S3 public base URL, otherwise 400; the server never checks that the object exists or belongs to this user. It inserts the posts row, then, before replying, loads every follower id and inserts one feed_items row per follower in a single statement, and finally returns 201 with the post. The two writes are not in a transaction, so if the fan-out fails the post is already saved but the client sees a 500; users cannot follow themselves, so the post never shows up in the author's own fan-out feed.",
+   "evidence": [
+    "src/controllers/post.controller.js:12",
+    "src/controllers/post.controller.js:15",
+    "src/services/upload.service.js:52",
+    "src/services/post.service.js:7",
+    "src/services/feed.service.js:9",
+    "src/services/feed.service.js:18",
+    "src/controllers/post.controller.js:21",
+    "src/services/feed.service.js:27",
+    "src/services/feed.service.js:28",
+    "src/db/migrations/004_create_follows_table.sql:6"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/api/posts/:id",
+   "summary": "Public read of one post. It selects the post by id and returns 404 if it does not exist. It then counts likes and comments in parallel and returns 200 with the post row plus likeCount and commentCount. Post ids are UUIDs, so a malformed id such as /api/posts/abc makes Postgres throw, and the client gets a 500 containing the raw database error message instead of a 404.",
+   "evidence": [
+    "src/services/post.service.js:16",
+    "src/controllers/post.controller.js:26",
+    "src/controllers/post.controller.js:28",
+    "src/controllers/post.controller.js:33",
+    "src/db/migrations/003_create_posts_table.sql:2",
+    "src/middlewares/error.middleware.js:3",
+    "src/middlewares/error.middleware.js:9"
+   ]
+  },
+  {
+   "id": "flow:route:POST:/api/posts/:id/comments",
+   "summary": "Adds a comment to a post. It needs a valid access token and looks up the post first (404 if missing); only after that does it reject an empty or whitespace-only body with 400. It inserts the comment, then inserts a 'comment' notification for the post's owner (skipped when you comment on your own post), and returns 201 with the comment. The comment and notification inserts are separate statements with no transaction, and a body over 2200 characters hits the column limit and returns 500.",
+   "evidence": [
+    "src/routes/post.routes.js:18",
+    "src/controllers/comment.controller.js:17",
+    "src/controllers/comment.controller.js:21",
+    "src/services/comment.service.js:7",
+    "src/controllers/comment.controller.js:26",
+    "src/services/notification.service.js:7",
+    "src/controllers/comment.controller.js:33",
+    "src/db/migrations/007_create_comments_table.sql:5"
+   ]
+  },
+  {
+   "id": "flow:route:DELETE:/api/posts/:id/comments/:commentId",
+   "summary": "Deletes a comment. It loads the comment by :commentId (404 if missing), then loads the post that comment belongs to, and allows the delete only for the comment's author or the post's owner; anyone else gets 403. On success it deletes the row and returns 204, and Postgres's ON DELETE CASCADE also removes any notification that pointed at the comment. The :id post segment in the URL is never used, so the delete works under any post id in the path.",
+   "evidence": [
+    "src/controllers/comment.controller.js:49",
+    "src/controllers/comment.controller.js:50",
+    "src/controllers/comment.controller.js:52",
+    "src/controllers/comment.controller.js:53",
+    "src/controllers/comment.controller.js:54",
+    "src/services/comment.service.js:50",
+    "src/controllers/comment.controller.js:57",
+    "src/db/migrations/008_create_notifications_table.sql:7"
+   ]
+  },
+  {
+   "id": "flow:route:POST:/api/posts/:id/like",
+   "summary": "Likes a post for the logged-in user. It looks up the post (404 if missing) and inserts into likes with ON CONFLICT DO NOTHING, so repeating the request is harmless and always returns 204. A 'like' notification is written only when a new row was inserted and the liker is not the post's owner. Unlike deletes the like but keeps the notification, so liking again after unliking sends a second notification.",
+   "evidence": [
+    "src/controllers/like.controller.js:7",
+    "src/services/like.service.js:8",
+    "src/services/like.service.js:9",
+    "src/services/like.service.js:12",
+    "src/controllers/like.controller.js:20",
+    "src/services/notification.service.js:7",
+    "src/controllers/like.controller.js:23",
+    "src/services/like.service.js:16"
+   ]
+  },
+  {
+   "id": "flow:route:POST:/api/users/:username/follow",
+   "summary": "Follows another user. The target is looked up by username (404 if missing), trying to follow yourself returns 400, and the edge is inserted with ON CONFLICT DO NOTHING, so a repeat follow does nothing. A 'follow' notification is created only for a new edge, and the reply is 204 with no body. Following does not copy the target's existing posts into the follower's feed_items, so the fan-out-on-write feed only shows posts they publish from now on.",
+   "evidence": [
+    "src/controllers/follow.controller.js:8",
+    "src/controllers/follow.controller.js:10",
+    "src/services/follow.service.js:15",
+    "src/services/follow.service.js:16",
+    "src/services/follow.service.js:21",
+    "src/controllers/follow.controller.js:21",
+    "src/controllers/follow.controller.js:24",
+    "src/services/feed.service.js:9"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/api/users/:username/follow-status",
+   "summary": "Reports the relationship between the logged-in caller and :username. The target is looked up by username (404 if missing), then two existence checks run in parallel, one for each direction. The reply is 200 with followsThem, followedByThem and isMutual. Both lookups hit the (follower_id, followee_id) primary key, so they are cheap.",
+   "evidence": [
+    "src/routes/profile.routes.js:19",
+    "src/controllers/follow.controller.js:59",
+    "src/controllers/follow.controller.js:62",
+    "src/controllers/follow.controller.js:67",
+    "src/services/follow.service.js:33",
+    "src/db/migrations/004_create_follows_table.sql:5"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/api/notifications",
+   "summary": "Returns the caller's notification inbox. Two queries run in parallel: one page of notifications, and the total unread count. The page is newest first, joined to users for the actor's username and avatar, keyset-paginated by (created_at, id), with the limit clamped to 1-100 (default 20). The reply is 200 with notifications, nextCursor and unreadCount; reading the list marks nothing as read, which is done by the separate PATCH /:id/read and /read-all endpoints.",
+   "evidence": [
+    "src/controllers/notification.controller.js:6",
+    "src/services/notification.service.js:32",
+    "src/services/notification.service.js:34",
+    "src/utils/pagination.js:17",
+    "src/utils/pagination.js:20",
+    "src/services/notification.service.js:47",
+    "src/controllers/notification.controller.js:10",
+    "src/routes/notification.routes.js:10",
+    "src/routes/notification.routes.js:11"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/api/posts/:id/comments",
+   "summary": "Public, paginated comment thread for a post. It checks that the post exists (404 otherwise), then returns comments oldest first, joined to users for username and avatar. The cursor encodes the last comment's created_at and id and the next page asks for rows after it, with page size clamped to 1-100 (default 20). node-postgres turns created_at into a JS Date, which keeps only milliseconds while Postgres stores microseconds, so the cursor sits just before the real row and each next page starts by repeating the previous page's last comment. nextCursor is set whenever a page is full, so a client may fetch one last empty page.",
+   "evidence": [
+    "src/routes/post.routes.js:19",
+    "src/controllers/comment.controller.js:37",
+    "src/services/comment.service.js:36",
+    "src/services/comment.service.js:38",
+    "src/services/comment.service.js:28",
+    "src/utils/pagination.js:3",
+    "src/controllers/comment.controller.js:42",
+    "src/services/comment.service.js:43"
+   ]
+  }
+ ],
+ "insights": [
+  {
+   "title": "Bad input becomes a 500 that leaks the database error",
+   "explanation": "Ids are UUID columns, but route params such as /api/posts/:id go straight into SQL, so a non-UUID value makes Postgres throw an error that has no statusCode. The error middleware then returns 500 and sends err.message, the raw Postgres text, to the client. The same thing happens with a tampered pagination cursor (decodeCursor only checks that both halves exist) and with values longer than a column allows, such as a bio over 150 characters. Nothing validates input first to turn these into 400 or 404.",
+   "severity": "medium",
+   "evidence": [
+    "src/db/migrations/003_create_posts_table.sql:2",
+    "src/controllers/post.controller.js:25",
+    "src/middlewares/error.middleware.js:3",
+    "src/middlewares/error.middleware.js:9",
+    "src/utils/pagination.js:9",
+    "src/db/migrations/002_add_profile_fields_to_users.sql:3"
+   ]
+  },
+  {
+   "title": "Like/unlike and follow/unfollow loops spam notifications",
+   "explanation": "The 'notify only on a new like or follow' guard depends on the ON CONFLICT rowCount, but unlike and unfollow delete the row and never touch the notification. So like, unlike, like (or follow, unfollow, follow) inserts a fresh row every time and writes another notification. Nothing removes duplicate notifications, and these routes are not behind the Redis auth limiter, only nginx's 10 r/s per IP.",
+   "severity": "medium",
+   "evidence": [
+    "src/services/like.service.js:12",
+    "src/services/like.service.js:16",
+    "src/controllers/like.controller.js:20",
+    "src/services/follow.service.js:28",
+    "src/controllers/follow.controller.js:21",
+    "src/services/notification.service.js:10",
+    "nginx.conf:8"
+   ]
+  },
+  {
+   "title": "Fan-out feed drifts away from the follow graph",
+   "explanation": "feed_items rows are written only at publish time, for whoever follows the author at that moment. Following someone does not add their older posts and unfollowing does not delete their feed_items, so /api/feed/fanout-write keeps showing posts from people you unfollowed and misses older posts from people you just followed. /api/feed/fanout-read joins follows live and gets both cases right, so the two feed endpoints return different feeds for the same user.",
+   "severity": "medium",
+   "evidence": [
+    "src/services/feed.service.js:9",
+    "src/services/follow.service.js:19",
+    "src/services/follow.service.js:28",
+    "src/services/feed.service.js:45",
+    "src/services/feed.service.js:73"
+   ]
+  },
+  {
+   "title": "No transactions around multi-step writes",
+   "explanation": "Every query runs through pool.query on its own, and the code never opens a transaction. publishPost commits the post and then fans it out; if the fan-out fails, the client gets a 500 even though the post exists, and the obvious retry creates a duplicate post. Comment plus notification works the same way: a failed notification insert returns 500 after the comment is already saved.",
+   "severity": "medium",
+   "evidence": [
+    "src/config/db.js:13",
+    "src/services/feed.service.js:27",
+    "src/services/feed.service.js:28",
+    "src/controllers/comment.controller.js:25",
+    "src/controllers/comment.controller.js:26"
+   ]
+  },
+  {
+   "title": "Fan-out-write feed cursor uses the wrong timestamp",
+   "explanation": "getFeedFanoutWrite sorts and filters by feed_items.created_at, but builds nextCursor from p.created_at, the post's own time. The post time is always a little earlier, because feed_items get now() when the fan-out insert runs after the post insert. So the next page starts slightly before where the last row really was, and feed rows created in that gap are silently skipped. The fanout-read feed sorts and pages on the same column, so it does not have this bug.",
+   "severity": "low",
+   "evidence": [
+    "src/services/feed.service.js:39",
+    "src/services/feed.service.js:44",
+    "src/services/feed.service.js:48",
+    "src/services/feed.service.js:54",
+    "src/db/migrations/005_create_feed_items_table.sql:5"
+   ]
+  },
+  {
+   "title": "Postgres published on the host with default credentials",
+   "explanation": "The app container is only exposed on the internal Docker network, but the postgres service maps port 5432 on the host with user and password postgres/postgres. Anyone who can reach the host can connect as the superuser and read or change every table, bypassing nginx, the rate limiters and the app. Redis, by comparison, is not published.",
+   "severity": "high",
+   "evidence": [
+    "docker-compose.yml:11",
+    "docker-compose.yml:17",
+    "docker-compose.yml:18",
+    "docker-compose.yml:22",
+    "docker-compose.yml:23"
+   ]
+  },
+  {
+   "title": "Register, login and refresh share one per-IP limit",
+   "explanation": "A single authLimiter instance is mounted on all three routes, so they share one Redis counter per client IP: 20 requests per 15 minutes in total, successful ones included. Token refreshes use up the login budget, and many users behind one NAT or office IP can lock each other out. The limit is per IP only, so an attacker who rotates IPs is never limited per target account.",
+   "severity": "medium",
+   "evidence": [
+    "src/middlewares/rateLimit.middleware.js:7",
+    "src/middlewares/rateLimit.middleware.js:9",
+    "src/middlewares/rateLimit.middleware.js:14",
+    "src/routes/auth.routes.js:11",
+    "src/routes/auth.routes.js:12",
+    "src/routes/auth.routes.js:13",
+    "src/app.js:24"
+   ]
+  },
+  {
+   "title": "Emails and usernames are not normalized or validated",
+   "explanation": "Email and username uniqueness and lookups are exact, case-sensitive matches, so Alice@x.com and alice@x.com can be two accounts, and login fails if the user types a different case. Registration only checks that the fields are present, with no format or reserved-name rules. So someone can register the username 'me', and that profile is unreachable because GET /api/users/me is matched by the authenticated /me route first.",
+   "severity": "low",
+   "evidence": [
+    "src/services/user.service.js:28",
+    "src/db/migrations/001_create_users_table.sql:6",
+    "src/controllers/auth.controller.js:25",
+    "src/routes/profile.routes.js:11",
+    "src/routes/profile.routes.js:13"
+   ]
+  }
+ ]
+}

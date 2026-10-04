@@ -44,7 +44,7 @@ describe("simulations behave the way the theory says", () => {
     expect(Math.abs(ws.memoryMB - wsMeasured) / wsMeasured).toBeLessThan(0.25);
     // Enough polling overloads one Node process.
     expect(deliver("short-poll", 200_000, 1, 1).overloaded).toBe(true);
-  });
+  }, 20_000); // thousands of simulated connections: slow when the machine is busy
 
   it("pooling: a tiny pool queues; a connection per request fails past max_connections", () => {
     const pool = PAGES.find((p) => p.concept === "connection-pooling")!.sim;

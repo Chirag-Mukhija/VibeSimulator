@@ -122,7 +122,9 @@ function audit(): string[] {
     if (clipsX && s.textOverflow !== "ellipsis" && el.scrollWidth > el.clientWidth + 2 && el.clientWidth > 0) {
       problems.push(`clips content horizontally: ${describe(el)} (${el.scrollWidth} > ${el.clientWidth})`);
     }
-    if (clipsY && !el.classList.contains("workspace") && el.scrollHeight > el.clientHeight + 2 && el.clientHeight > 0 && s.textOverflow !== "ellipsis") {
+    // A line clamp ends in an ellipsis too, and its owner offers a way to read the rest.
+    const clamped = s.getPropertyValue("-webkit-line-clamp") !== "none" && s.getPropertyValue("-webkit-line-clamp") !== "";
+    if (clipsY && !clamped && !el.classList.contains("workspace") && el.scrollHeight > el.clientHeight + 2 && el.clientHeight > 0 && s.textOverflow !== "ellipsis") {
       problems.push(`clips content vertically: ${describe(el)} (${el.scrollHeight} > ${el.clientHeight})`);
     }
   }

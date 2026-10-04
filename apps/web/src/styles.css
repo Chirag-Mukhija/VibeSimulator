@@ -633,3 +633,87 @@ ul.plain { margin: 0; padding-left: 18px; display: grid; gap: 6px; color: var(--
 }
 @media (max-width: 760px) { .list-toggle { display: none; } }
 .dev-stages li button { height: 25px; font-size: 12px; }
+
+/* --------------------------------------------------------- concept scenes */
+
+.drawer { width: min(820px, 100vw); }
+.cscene { display: grid; gap: 12px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg-elev); padding: 16px; }
+.cscene.compact { padding: 12px; }
+.cscene-head { display: grid; gap: 4px; }
+.cscene-head h3 { font-size: 16px; }
+.cscene-head p { margin: 0; font-size: 13.5px; line-height: 1.55; }
+.cscene-controls { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+.cscene-control { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; }
+.cscene-control input { accent-color: var(--accent); width: 16px; height: 16px; }
+.stepper { display: inline-flex; align-items: center; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); overflow: hidden; }
+.stepper button { border: 0; background: var(--bg-elev-2); width: 24px; height: 24px; cursor: pointer; color: var(--text); font-size: 14px; }
+.stepper button:disabled { opacity: 0.4; cursor: default; }
+.stepper b { min-width: 26px; text-align: center; font-variant-numeric: tabular-nums; font-size: 13px; }
+.cscene-stage { position: relative; display: flex; justify-content: center; overflow: hidden; border-radius: var(--radius-sm);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px); background-size: 24px 24px; background-color: var(--bg); }
+.cscene-sizer { position: relative; flex: none; }
+.cscene-canvas { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.cscene-links { position: absolute; inset: 0; overflow: visible; }
+.cbox {
+  position: absolute; display: flex; flex-direction: column; gap: 6px; padding: 9px 11px 9px 13px; background: var(--bg-elev);
+  border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: inset 3px 0 0 var(--dev-color); transition: border-color 0.2s;
+}
+.cbox.tone-busy { border-color: var(--sev-medium); }
+.cbox.tone-bad { border-color: var(--sev-high); box-shadow: inset 3px 0 0 var(--dev-color), 0 0 0 2px color-mix(in srgb, var(--sev-high) 25%, transparent); }
+.cbox.tone-idle { opacity: 0.8; }
+.cbox-head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: center; }
+.cbox-name { display: grid; min-width: 0; }
+.cbox-name b { font-size: 13px; }
+.cbox-name span { font-size: 11px; color: var(--text-faint); }
+.cbox-slots { display: flex; gap: 4px; flex-wrap: wrap; }
+.cbox-slots span { width: 14px; height: 10px; border-radius: 2px; border: 1.5px solid var(--dev-color); }
+.cbox-slots span.busy { background: var(--dev-color); }
+.cbox-slots em { font-style: normal; font-size: 10.5px; color: var(--text-faint); margin-left: 2px; line-height: 10px; white-space: nowrap; }
+.cbox-queue { display: flex; gap: 3px; align-items: center; flex-wrap: wrap; }
+.cbox-queue span { width: 8px; height: 8px; border-radius: 50%; background: var(--sev-medium); }
+.cbox-queue em { font-style: normal; font-size: 11px; color: var(--sev-medium); margin-left: 3px; }
+.cbox-note { font-size: 11.5px; color: var(--text-dim); }
+.cscene-counters { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+.cscene-counters .metric { padding: 8px 10px; }
+.cscene-counters .metric-value { font-size: 17px; }
+.cscene-log { list-style: none; margin: 0; padding: 8px 10px; display: grid; gap: 3px; background: var(--bg); border-radius: var(--radius-sm); font-size: 12.5px; color: var(--text-faint); min-height: 66px; }
+.cscene-log li.latest { color: var(--text); }
+.cscene-try { display: grid; gap: 6px; }
+.try-item { text-align: left; border: 1px solid var(--border); background: var(--bg); border-radius: var(--radius-sm); padding: 8px 10px; font-size: 13px; color: var(--text-dim); cursor: pointer; line-height: 1.45; }
+.try-item:hover { border-color: var(--accent); color: var(--text); }
+.measure { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; background: var(--bg-elev); }
+.measure summary { cursor: pointer; font-weight: 600; font-size: 13.5px; }
+.measure[open] summary { margin-bottom: 10px; }
+
+/* AI notes: always labelled, so they are never mistaken for what the parser proved */
+.ai-badge {
+  display: inline-flex; align-items: center; height: 17px; padding: 0 6px; margin-left: 6px; vertical-align: 2px;
+  border-radius: 999px; border: 1px solid var(--k-messaging); color: var(--k-messaging);
+  font: 600 10px/1 var(--mono); letter-spacing: 0.06em;
+}
+.ai-provenance { font-size: 12px !important; margin: 0; }
+.ai-notes { gap: 12px; }
+.ai-insight { display: grid; gap: 6px; padding: 12px 0 0; border-top: 1px solid var(--border); }
+.ai-insight p { margin: 0; color: var(--text-dim); font-size: 13.5px; line-height: 1.55; max-width: 92ch; }
+.ai-cites { gap: 6px; }
+.ai-cites .btn { font-family: var(--mono); font-size: 11.5px; }
+.ai-cites .btn.on { border-color: var(--accent); color: var(--accent-text); }
+.ai-summary { border-left: 3px solid var(--k-messaging); padding: 1px 0 1px 12px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: start; }
+.ai-summary.open { grid-template-columns: minmax(0, 1fr); }
+.ai-summary > p { margin: 0; font-size: 13px; line-height: 1.5; color: var(--text-dim); max-width: 120ch; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.ai-summary.open > p { -webkit-line-clamp: unset; display: block; color: var(--text); }
+.ai-summary-label { font-weight: 600; color: var(--text); margin-right: 8px; }
+.ai-summary-actions { gap: 12px; font-size: 12px; }
+.ai-summary-actions .linklike { font-size: 12px; }
+.ai-summary .ai-provenance { color: var(--text-faint); }
+
+/* Short laptop screens: give the device scene the room; the list scrolls and the inspector repeats the full caption. */
+@media (max-height: 820px) {
+  .stage-head { padding: 10px 18px 8px; gap: 6px; }
+  .event-list { height: clamp(84px, 15vh, 130px); }
+  .ai-summary:not(.open) > p { -webkit-line-clamp: 1; }
+}
+/* Only where the inspector is on screen to show the full caption. */
+@media (max-height: 820px) and (min-width: 1101px) {
+  .step-caption > .grow > span:last-child { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+}

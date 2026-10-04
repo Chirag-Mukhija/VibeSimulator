@@ -2,7 +2,7 @@
 
 See how every request really moves through your backend, verified from the code, and what will break when traffic grows.
 
-Point it at a JavaScript or TypeScript backend. It reads the code (nothing is uploaded, nothing is executed) and builds every path from a click, timer or message to the database and back: each function, query, Redis command, publish, WebSocket push and outside API call, with the line of code that proves it. A web viewer plays each path as an animated sequence diagram, explains every hop in plain words, flags what breaks at scale, and links each pattern to a Learn page with a simulation calibrated against a real Node server. The Scale tab runs any path under load (its real queries, Redis commands, API calls and password hashes) and lets you try fixes: more instances, a read cache, a background queue, push instead of polling, a read replica, batched queries.
+Point it at a JavaScript or TypeScript backend. It reads the code (nothing is uploaded, nothing is executed) and builds every path from a click, timer or message to the database and back: each function, query, Redis command, publish, WebSocket push and outside API call, with the line of code that proves it. A web viewer plays each path device to device, like a network simulator: packets travel between the browser, your processes, databases and outside services, one step at a time, paced so you can read what each step does and why. It flags what breaks at scale and links each pattern to a Learn page with an animated scene you can experiment with, plus a simulation calibrated against a real Node server. The Scale tab runs any path under load (its real queries, Redis commands, API calls and password hashes) and lets you try fixes: more instances, a read cache, a background queue, push instead of polling, a read replica, batched queries.
 
 **Docs:** [Usage guide](docs/USAGE.md) · [Architecture](docs/ARCHITECTURE.md)
 
@@ -23,6 +23,12 @@ pnpm vibesim analyze path/to/your/repo -o vibesim.trace.json
 
 The trace includes a few lines of code around each hop so the viewer can show them; add `--no-source` to leave code out. The viewer reads the file in your browser.
 
+Optionally, if you have Claude Code, add AI notes (a plain-language summary per flow, and insights the rules don't cover). A second pass checks every note against the code, and the viewer labels them as AI-written:
+
+```bash
+pnpm vibesim explain path/to/your/repo -t vibesim.trace.json
+```
+
 Build the static site (any static host works, routing is hash-based):
 
 ```bash
@@ -32,9 +38,11 @@ pnpm --filter @vibesim/web build      # apps/web/dist
 ## What it understands
 
 - **Frameworks:** Express (app/router chains, mounts, `route()` chains, routers mounted in loops, middleware factories, wrapped controllers), Next.js App Router route handlers, async server-component pages, Server Actions (shown as the HTTP calls they are), Pages Router API routes.
-- **Data:** `pg` (pools, checked-out clients and transactions, per-request clients), Prisma (including the `globalThis` singleton), Drizzle, Mongoose (models, documents, schema methods), MySQL, Supabase. Your `.sql` migrations are read for keys and indexes.
-- **Messaging and realtime:** node-redis and ioredis (commands, pub/sub), BullMQ and Bull queues and workers, `ws` and socket.io (connections, pushes, rooms, adapters), session stores, Passport `deserializeUser`.
-- **Outside calls:** `fetch`, axios (instances, base URLs, timeouts), AWS S3 (including presigning, which makes no network call), Stripe, OpenAI, Anthropic, Resend, Twilio, nodemailer.
+- **Data:** `pg` (pools, checked-out clients and transactions, per-request clients), Prisma (including the `globalThis` singleton), Drizzle, Mongoose (models, documents, schema methods, `pre('save')` hooks), the MongoDB driver, MySQL, Supabase. Your `.sql` migrations are read for keys and indexes.
+- **Messaging and realtime:** node-redis and ioredis (commands, pub/sub), BullMQ and Bull queues and workers, `ws` and socket.io (connections, pushes, rooms, adapters).
+- **Sessions and auth:** express-session stores (the read and the end-of-request save), Passport (`deserializeUser`, strategies, OAuth token and profile calls), rate limiters.
+- **Control flow:** which branch each call is on (guard clauses, early returns, if/else), whether the caller waits for it, loops and `Promise.all`, error paths, what each handler answers, deliberate sleeps, and state kept in process memory.
+- **Outside calls:** `fetch`, axios (instances, base URLs, timeouts), AWS S3 (including presigning, which makes no network call), Stripe, OpenAI, Anthropic, Resend, Twilio, nodemailer, Octokit, Google APIs, LangChain and more SDKs.
 - **Frontend:** inline `<script>` pages, React components (`onClick`, `onSubmit`, `useEffect`), `setInterval` polling, `new WebSocket`, matched to your own routes.
 - **Infrastructure:** `package.json` scripts, Dockerfiles, `docker-compose.yml` services, Nginx `proxy_pass` and rate limits.
 
@@ -79,8 +87,8 @@ packages/spec        Trace Spec v1: the JSON format, validated with zod
 packages/extractor   ts-morph analyzer, eval harness and blind samples
 packages/findings    deterministic scale-risk rules
 packages/sim         discrete-event engine, calibrated parameters, flow simulation for Scale mode
-packages/catalog     concept catalog, Learn pages and their simulations
-apps/cli             `vibesim analyze`
+packages/catalog     concept catalog, Learn pages, animated concept scenes and simulations
+apps/cli             `vibesim analyze` and the optional `vibesim explain`
 apps/web             the static viewer (Vite + React), Playwright tests in e2e/
 calibration          real-server measurements
 fixtures/repos       ground-truth repos (the three gallery repos are source-only copies)

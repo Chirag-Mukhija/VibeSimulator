@@ -169,7 +169,7 @@ export function callSites(owner: Node): CallSite[] {
       if (Node.isFunctionDeclaration(st) || Node.isClassDeclaration(st)) continue;
       visit(st, current);
       if (Node.isIfStatement(st) && !st.getElseStatement() && alwaysExits(st.getThenStatement())) {
-        current = enter(current, { condition: conditionText(st.getExpression()), branch: "else", guard: !doesWork(st.getThenStatement()) });
+        current = enter(current, { condition: conditionText(st.getExpression()), branch: "else", exits: true, guard: !doesWork(st.getThenStatement()) });
       }
     }
   };

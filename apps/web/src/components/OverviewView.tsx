@@ -4,6 +4,7 @@ import type { Model } from "../lib/model.ts";
 import type { GalleryEntry } from "../lib/data.ts";
 import { buildOverview } from "../lib/summary.ts";
 import { FindingCard } from "./Inspector.tsx";
+import { AiInsights } from "./AiNotes.tsx";
 import { Icon } from "./ui.tsx";
 
 export function OverviewView({ model, entry, onOpenFlow, onOpenConcept, onTab }: {
@@ -98,6 +99,7 @@ export function OverviewView({ model, entry, onOpenFlow, onOpenConcept, onTab }:
             </section>
           </div>
         </div>
+        {model.spec.notes && <AiInsights notes={model.spec.notes} />}
       </div>
     </div>
   );

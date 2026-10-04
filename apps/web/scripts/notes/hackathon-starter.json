@@ -1,0 +1,388 @@
+{
+ "flows": [
+  {
+   "id": "flow:route:GET:/auth/discord/callback",
+   "summary": "Passport checks the OAuth state and swaps Discord's code for an access token, then the verify callback calls https://discord.com/api/users/@me itself; a non-OK reply becomes a 500 and a profile without id/username flashes an error and fails to /auth/failure. handleAuthLogin then links the Discord id to an already logged-in user (if another account owns that id it flashes an error and redirects to '/'), signs in a returning user found by discord id, or creates a new user, refusing when Discord gave no email or the email already belongs to an account. On success the user is logged in and redirected to session.returnTo or '/'; refusals go to /auth/failure, which flashes a message and bounces to a safe returnTo or '/'. The avatar URL is built from Discord's avatar hash and stored in profile.pictures.",
+   "evidence": [
+    "config/passport.js:735",
+    "config/passport.js:742",
+    "config/passport.js:747",
+    "config/passport.js:751",
+    "config/passport.js:762",
+    "config/passport.js:83",
+    "config/passport.js:161",
+    "config/passport.js:164",
+    "config/passport.js:117",
+    "config/passport.js:123",
+    "config/passport.js:129",
+    "config/passport.js:759",
+    "app.js:395",
+    "app.js:396",
+    "app.js:345",
+    "app.js:357"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/auth/linkedin/callback",
+   "summary": "After the code-for-token exchange, the verify callback fetches LinkedIn's OpenID userinfo endpoint and uses its 'sub' claim as the LinkedIn id; a failed fetch is a 500 and a missing sub/name is a flashed failure. handleAuthLogin links, signs in, or creates the account like the other providers. Only when linking or creating does saveOAuth2UserTokens store the access token (plus an expiry computed from expires_in) in user.tokens; a returning user who signs in gets the stored user back and the new token is discarded. A brand-new user is written to MongoDB twice: once inside saveOAuth2UserTokens before the profile name/picture are set, and again after they are filled in. Success redirects to session.returnTo or '/', refusals go through /auth/failure.",
+   "evidence": [
+    "config/passport.js:438",
+    "config/passport.js:446",
+    "config/passport.js:449",
+    "config/passport.js:453",
+    "config/passport.js:458",
+    "config/passport.js:464",
+    "config/passport.js:207",
+    "config/passport.js:240",
+    "config/passport.js:140",
+    "config/passport.js:152",
+    "app.js:383"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/auth/microsoft/callback",
+   "summary": "The verify callback calls Microsoft Graph /v1.0/me with the new access token and takes the email from 'mail', falling back to 'userPrincipalName', so a new account can be created with the UPN as its email. 'offline_access' is deliberately left out of the scope, so Microsoft returns no refresh token and the stored access token simply expires. handleAuthLogin then links, signs in, or creates the user and the handler redirects to session.returnTo or '/'; a failed Graph call is a 500 and invalid profile data is a flashed redirect via /auth/failure.",
+   "evidence": [
+    "config/passport.js:491",
+    "config/passport.js:493",
+    "config/passport.js:501",
+    "config/passport.js:504",
+    "config/passport.js:508",
+    "config/passport.js:515",
+    "config/passport.js:518",
+    "app.js:387"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/auth/tumblr/callback",
+   "summary": "This route uses passport.authorize, not authenticate, so it never changes who is logged in; it only attaches Tumblr credentials to an account. The OAuth 1.0a verify callback signs a request to api.tumblr.com/v2/user/info and uses the primary blog's uuid as the Tumblr id; Tumblr supplies no email, so an anonymous visitor hits EMAIL_REQUIRED and is sent to /auth/failure, unless that Tumblr account is already linked to a user, in which case the callback succeeds without logging anyone in. For a logged-in user the token and token secret are pushed onto user.tokens (re-authorizing appends a second 'tumblr' entry instead of replacing it) and the user is saved, then redirected to session.returnTo or '/'. If the Tumblr account has no blogs, primaryBlog.uuid throws and the request ends in a 500.",
+   "evidence": [
+    "app.js:403",
+    "app.js:404",
+    "config/passport.js:598",
+    "config/passport.js:603",
+    "config/passport.js:610",
+    "config/passport.js:612",
+    "config/passport.js:619",
+    "config/passport.js:121",
+    "config/passport.js:123",
+    "config/passport.js:90",
+    "config/passport.js:91",
+    "config/passport.js:639"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/auth/facebook/callback",
+   "summary": "The strategy forces Facebook to re-ask for declined permissions (auth_type=rerequest) and the verify callback builds the profile from Graph fields, using a graph.facebook.com picture URL. No refresh token is passed on, so only the access token and its expiry (from expires_in) are stored; once it expires, isAuthorized cannot refresh it and redirects the user back to /auth/facebook. handleAuthLogin links, signs in, or creates the account; a missing email or an email already in use gives a flashed error and a redirect through /auth/failure, and success redirects to session.returnTo or '/'.",
+   "evidence": [
+    "config/passport.js:251",
+    "config/passport.js:252",
+    "config/passport.js:261",
+    "config/passport.js:273",
+    "config/passport.js:279",
+    "config/passport.js:207",
+    "config/passport.js:889",
+    "config/passport.js:890",
+    "config/passport.js:167",
+    "config/passport.js:172",
+    "app.js:367"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/auth/github/callback",
+   "summary": "GitHub can return several emails, so the verify callback sorts them primary first, then verified, and takes the first; verification is only a tie-breaker, so an unverified address can still become the account email. GitHub gives no refresh token or expiry, so handleAuthLogin stores just the access token when it links GitHub to the logged-in user or creates a new user (refused if the email already exists). A returning user who signs in gets the stored user back and the new token is discarded, so re-logging in doesn't refresh a stale token. Success redirects to session.returnTo or '/'; refusals flash an error and redirect through /auth/failure.",
+   "evidence": [
+    "config/passport.js:306",
+    "config/passport.js:313",
+    "config/passport.js:314",
+    "config/passport.js:315",
+    "config/passport.js:324",
+    "config/passport.js:328",
+    "config/passport.js:117",
+    "config/passport.js:129",
+    "app.js:371"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/auth/google/callback",
+   "summary": "Google is asked for offline access with prompt=consent plus read-only Drive metadata and Sheets scopes, so each consent returns a refresh token, and the strategy is registered with passport-oauth2-refresh for later refreshes. Its callback URL is relative, so the redirect URI is resolved from the incoming request's host instead of BASE_URL as most other providers use. For a returning user who is not logged in, handleAuthLogin returns the stored user immediately and the fresh access/refresh tokens are discarded; only linking or first sign-up saves them. Success redirects to session.returnTo or '/'; failures go through /auth/failure.",
+   "evidence": [
+    "config/passport.js:393",
+    "config/passport.js:394",
+    "config/passport.js:395",
+    "config/passport.js:396",
+    "config/passport.js:426",
+    "patches/passport-oauth2+1.8.0.patch:32",
+    "config/passport.js:411",
+    "config/passport.js:117",
+    "config/passport.js:119",
+    "app.js:375"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/auth/twitch/callback",
+   "summary": "The Twitch strategy requests email, subscription and follower-read scopes, and the verify callback reads the email from profile._json.data[0].email. handleAuthLogin then links, signs in, or creates the user; only linking or creating stores the access token, refresh token and expiry (a returning user's new tokens are discarded); the strategy is registered with passport-oauth2-refresh so /api/twitch can refresh it later. Success redirects to session.returnTo or '/', while a missing or already-used email redirects through /auth/failure with a flash message.",
+   "evidence": [
+    "config/passport.js:543",
+    "config/passport.js:552",
+    "config/passport.js:557",
+    "config/passport.js:211",
+    "config/passport.js:212",
+    "config/passport.js:572",
+    "app.js:391"
+   ]
+  },
+  {
+   "id": "flow:route:POST:/signup",
+   "summary": "After the global middleware (including the CSRF check, since it is a POST), postSignup validates the email and, unless 'passwordless' is set, an 8+ character password matching confirmPassword, then normalizes the email and rejects disposable addresses. If the email already exists it does not error: it puts a 15-minute, IP-bound login token on the existing user, emails a login link and redirects to /login. Otherwise it saves a new user (password bcrypt-hashed in a pre-save hook; passwordless users get a random password) and either emails a login link and redirects to '/', or logs the user in and redirects to '/'. Despite the strict-limiter comment naming signup, only the global limiter applies, and mail failures never fail the request because sendMail turns them into a flash message.",
+   "evidence": [
+    "app.js:163",
+    "controllers/user.js:246",
+    "controllers/user.js:248",
+    "controllers/user.js:249",
+    "controllers/user.js:258",
+    "controllers/user.js:264",
+    "controllers/user.js:168",
+    "controllers/user.js:169",
+    "controllers/user.js:170",
+    "controllers/user.js:269",
+    "controllers/user.js:273",
+    "models/User.js:128",
+    "controllers/user.js:283",
+    "controllers/user.js:287",
+    "controllers/user.js:292",
+    "app.js:53",
+    "app.js:269",
+    "config/nodemailer.js:42"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/api/pubchem",
+   "summary": "An unauthenticated demo page: the handler fires five PubChem REST requests about aspirin (CID 2244) in parallel with Promise.all, plus a ready-made image URL. Each fetch has its own catch that returns an error object and res.ok is never checked, so a failing PubChem call leaves that part of the page empty instead of failing the request; there is no timeout, so the page waits for the slowest call. The results are reduced to compound, properties, the first 10 synonyms, safety and manufacturing text and rendered with api/pubchem.",
+   "evidence": [
+    "app.js:319",
+    "controllers/api.js:1238",
+    "controllers/api.js:1241",
+    "controllers/api.js:1244",
+    "controllers/api.js:1245",
+    "controllers/api.js:1283",
+    "controllers/api.js:1316",
+    "controllers/api.js:1312"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/api/steam",
+   "summary": "isAuthenticated redirects anonymous users to /login, and isAuthorized looks for a 'steam' entry in user.tokens (created when linking via /auth/steam, where the stored 'access token' is just the Steam ID) and redirects to /auth/steam if it is missing. getSteam then calls the Steam Web API one call after another: recently played games, achievements for the most recent game, player summary and owned games, all over plain http with STEAM_KEY in the query string. Any failure is rethrown as a generic error and passed to next(), giving a 500, while a private profile (403 on achievements) or no recent games just leaves achievements empty.",
+   "evidence": [
+    "app.js:296",
+    "config/passport.js:853",
+    "config/passport.js:860",
+    "config/passport.js:896",
+    "config/passport.js:684",
+    "controllers/api.js:371",
+    "controllers/api.js:382",
+    "controllers/api.js:398",
+    "controllers/api.js:402",
+    "controllers/api.js:394",
+    "controllers/api.js:456",
+    "controllers/api.js:457",
+    "controllers/api.js:458",
+    "controllers/api.js:466"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/api/twitch",
+   "summary": "After isAuthenticated, isAuthorized finds the 'twitch' token and, if it expired more than a minute ago and a refresh token exists, refreshes it through passport-oauth2-refresh before continuing; with no token or no refresh token it redirects to /auth/twitch. getTwitch then makes four sequential Helix calls (your user, your followers, live Destiny 2 streams, the top streamer's profile) with the access token and Client-ID. If no Destiny 2 stream is live, streams.data[0] is undefined and topStream.user_login throws, so the page returns a 500 even though the render code tries to default to {}.",
+   "evidence": [
+    "app.js:306",
+    "config/passport.js:863",
+    "config/passport.js:870",
+    "config/passport.js:890",
+    "config/passport.js:896",
+    "controllers/api.js:643",
+    "controllers/api.js:644",
+    "controllers/api.js:645",
+    "controllers/api.js:646",
+    "controllers/api.js:647",
+    "controllers/api.js:652",
+    "controllers/api.js:657"
+   ]
+  },
+  {
+   "id": "flow:route:POST:/login",
+   "summary": "A login limiter allows 10 attempts per hour per IP on top of the global limiter, then the handler validates and normalizes the email. With 'Login by Email Link' checked it looks the user up and either shows a generic message (no account) or stores a 15-minute token tied to a hash of the requester's IP, emails the link and redirects to /login. Otherwise passport-local finds the user by lowercased email and checks the bcrypt hash: failures flash the strategy's message and redirect to /login, users with 2FA get twoFactorPendingUserId in the session and go to /login/2fa/totp or /login/2fa, and everyone else is logged in and redirected to session.returnTo or '/'.",
+   "evidence": [
+    "app.js:44",
+    "app.js:62",
+    "app.js:253",
+    "controllers/user.js:35",
+    "controllers/user.js:41",
+    "controllers/user.js:46",
+    "controllers/user.js:50",
+    "controllers/user.js:56",
+    "controllers/user.js:57",
+    "controllers/user.js:80",
+    "config/passport.js:34",
+    "config/passport.js:44",
+    "controllers/user.js:106",
+    "controllers/user.js:110",
+    "controllers/user.js:113",
+    "controllers/user.js:120",
+    "controllers/user.js:122",
+    "controllers/user.js:127"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/account/unlink/:provider",
+   "summary": "For a logged-in user (the profile page uses plain links, so this is a GET), the handler HTML-escapes :provider, reloads the user, clears user[provider] and removes that provider's picture, falling back to gravatar or another provider's picture. If the account would be left without email+password and without any other OAuth token, it flashes an error and redirects to /account without saving. Otherwise it revokes the stored refresh and access tokens at the provider in parallel (best-effort, 8-second timeout, failures only logged), drops the provider's token entries, saves, and redirects to /account with a confirmation flash. Revocation happens before the save, so if the save fails the token is already revoked at the provider but still stored.",
+   "evidence": [
+    "app.js:284",
+    "views/account/profile.pug:213",
+    "controllers/user.js:425",
+    "controllers/user.js:426",
+    "controllers/user.js:427",
+    "controllers/user.js:432",
+    "controllers/user.js:440",
+    "controllers/user.js:459",
+    "controllers/user.js:463",
+    "controllers/user.js:467",
+    "config/token-revocation.js:40",
+    "config/token-revocation.js:115",
+    "config/token-revocation.js:132",
+    "controllers/user.js:468",
+    "controllers/user.js:469",
+    "controllers/user.js:473"
+   ]
+  },
+  {
+   "id": "flow:route:GET:/api/github",
+   "summary": "This route has no auth middleware: if the visitor is logged in with a stored GitHub token, Octokit fetches their profile, first 10 repos and recent events one after another; otherwise an unauthenticated client is used. In both cases it then fetches the public sahat/hackathon-starter repo and renders api/github, so anonymous traffic spends the server IP's unauthenticated GitHub quota (60 requests per hour). If one of the user-specific calls fails, the catch calls next(error) without returning, so it still fetches the repo and tries to render a second response.",
+   "evidence": [
+    "app.js:305",
+    "controllers/api.js:170",
+    "controllers/api.js:179",
+    "controllers/api.js:184",
+    "controllers/api.js:185",
+    "controllers/api.js:188",
+    "controllers/api.js:198",
+    "controllers/api.js:202",
+    "controllers/api.js:207",
+    "controllers/api.js:193"
+   ]
+  }
+ ],
+ "insights": [
+  {
+   "title": "Session ID is not rotated at login (session fixation)",
+   "explanation": "The postinstall patch to passport replaces req.session.regenerate/save in SessionManager with no-op defaults, and the app never supplies a delegate, so req.logIn keeps the pre-login session ID for password, email-link, signup and OAuth logins. An attacker who can plant a known startercookie value in a victim's browser shares the session once the victim logs in. A valid pre-login session ID is easy to get because anonymous GETs write returnTo into the session, which makes express-session store it.",
+   "severity": "medium",
+   "evidence": [
+    "package.json:18",
+    "patches/passport+0.7.0.patch:9",
+    "patches/passport+0.7.0.patch:26",
+    "patches/passport+0.7.0.patch:52",
+    "app.js:154",
+    "controllers/user.js:122",
+    "app.js:185"
+   ]
+  },
+  {
+   "title": "Refreshed OAuth tokens are never written to MongoDB",
+   "explanation": "user.tokens is a schemaless Array, so Mongoose only sees in-place edits after markModified('tokens'), which saveOAuth2UserTokens calls. isAuthorized edits accessToken/accessTokenExpires inside req.user.tokens and calls req.user.save() without markModified, and it ignores any new refresh token returned, so the refreshed token lives only for the current request and every later request repeats the refresh grant (providers that rotate refresh tokens will eventually reject the stale one). The expiry test also fires only once the token has been expired for over a minute (now - 60s rather than now + 60s), so expired tokens are sent during that first minute.",
+   "severity": "medium",
+   "evidence": [
+    "models/User.js:57",
+    "config/passport.js:239",
+    "config/passport.js:863",
+    "config/passport.js:872",
+    "config/passport.js:876",
+    "config/passport.js:878",
+    "config/passport.js:883"
+   ]
+  },
+  {
+   "title": "Unlinking is a state-changing GET outside CSRF protection",
+   "explanation": "lusca.csrf is the only CSRF defence and it does not check GET requests, yet unlinking is GET /account/unlink/:provider; the session cookie sets no SameSite attribute, so a link or redirect from another site can unlink a victim's provider and revoke its tokens. The :provider value is only HTML-escaped and then used as a property name on the user document, so any field name is accepted: /account/unlink/email for a user with an OAuth token blanks the required email and the save fails with a 500.",
+   "severity": "medium",
+   "evidence": [
+    "app.js:163",
+    "app.js:146",
+    "app.js:284",
+    "views/account/profile.pug:213",
+    "controllers/user.js:425",
+    "controllers/user.js:427",
+    "controllers/user.js:467",
+    "models/User.js:7"
+   ]
+  },
+  {
+   "title": "Account enumeration despite the anti-enumeration design",
+   "explanation": "The email-link login and the signup helper deliberately use identical messages so nobody can tell which emails are registered. But password login answers 'Email X not found.' for unknown addresses versus 'Invalid email or password.' for wrong passwords (and a distinct message for provider-only accounts), and POST /signup redirects to /login when the email exists but to '/' for a new account. Either difference reveals whether an email is registered.",
+   "severity": "medium",
+   "evidence": [
+    "controllers/user.js:49",
+    "controllers/user.js:161",
+    "config/passport.js:37",
+    "config/passport.js:41",
+    "config/passport.js:51",
+    "controllers/user.js:269",
+    "controllers/user.js:283",
+    "controllers/user.js:292"
+   ]
+  },
+  {
+   "title": "Strict rate limiter is on the wrong routes",
+   "explanation": "The strictLimiter comment says it covers signup, but POST /signup only has the global 200-per-15-minutes-per-IP limiter, and GET /contact (just the form) has the 5-per-hour strict limiter while POST /contact (which sends email) does not. Each signup attempt with an existing address emails that address a new login link and overwrites its pending loginToken, so one IP can send a victim up to 200 emails per 15 minutes and keep invalidating the link they last received.",
+   "severity": "medium",
+   "evidence": [
+    "app.js:53",
+    "app.js:42",
+    "app.js:269",
+    "app.js:270",
+    "app.js:271",
+    "controllers/user.js:268",
+    "controllers/user.js:168",
+    "controllers/user.js:188"
+   ]
+  },
+  {
+   "title": "A TLS downgrade branch that is dead today but dangerous on an older runtime",
+   "explanation": "When a send fails with exactly 'self signed certificate in certificate chain', sendMail retries with tls.rejectUnauthorized = false, which would hand the SMTP password and message contents to anyone presenting a self-signed chain. On the Node version this repo requires (24.18 or later, OpenSSL 3) the error text is spelled 'self-signed', so the comparison never matches and the retry never runs. Run it on an older Node and the downgrade silently comes back.",
+   "severity": "low",
+   "evidence": [
+    "config/nodemailer.js:25",
+    "config/nodemailer.js:28",
+    "package.json:125"
+   ]
+  },
+  {
+   "title": "Steam API key sent over plain HTTP and written to logs",
+   "explanation": "getSteam and the Steam OpenID verify callback put STEAM_KEY in the query string of http:// (not https) URLs to api.steampowered.com, so the key crosses the network unencrypted on every call. On errors the code logs the full URL, putting the key in application logs, and one log line prints the status of the wrong response (the recent-games call instead of the achievements call).",
+   "severity": "medium",
+   "evidence": [
+    "controllers/api.js:371",
+    "controllers/api.js:382",
+    "controllers/api.js:422",
+    "controllers/api.js:440",
+    "config/passport.js:658",
+    "controllers/api.js:405",
+    "controllers/api.js:406",
+    "controllers/api.js:427",
+    "controllers/api.js:445"
+   ]
+  },
+  {
+   "title": "Missing return after next(err) causes double responses",
+   "explanation": "In postLogin's email-link branch the catch calls next(err) without returning, so after a database error the handler falls through to the password-login code and tries to respond again. getGithub does the same when a user-specific GitHub call fails: it calls next(error) and still fetches the public repo and calls res.render. Both attempt a second response after the error handler has already answered.",
+   "severity": "low",
+   "evidence": [
+    "controllers/user.js:91",
+    "controllers/user.js:92",
+    "controllers/user.js:97",
+    "controllers/api.js:192",
+    "controllers/api.js:193",
+    "controllers/api.js:207"
+   ]
+  }
+ ]
+}

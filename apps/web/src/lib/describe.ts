@@ -127,6 +127,7 @@ export function eventTitle(model: Model, scene: Scene, ev: SceneEvent): string {
     case "local": {
       if (e.props.checkout) return "borrows a pool connection";
       if (e.props.release) return "returns the connection";
+      if (e.props.sleep) return e.label ?? "waits on purpose";
       const stage = ev.to.stage?.startsWith("__library") ? "library middleware" : fnName(to);
       if (to.kind === "compute") return e.label ?? to.label;
       if (to.kind === "middleware") return `runs ${stage}`;
@@ -258,6 +259,12 @@ function localSentence(e: TraceEdge, from: TraceNode, to: TraceNode, ev: SceneEv
     return `${fnName(from)} borrows one connection from the pool${n ? ` (${n} at most)` : ""} and keeps it for the statements that follow. No SQL is sent: an idle connection is handed over, a new one is opened if the pool isn't full, and if all are busy it waits. A transaction only works if every statement runs on this one connection.`;
   }
   if (e.props.release) return `${fnName(from)} gives the connection back to the pool (it's in a finally block, so this happens whether the transaction committed or rolled back). Forgetting this would leak one of the pool's connections for good.`;
+  if (e.props.sleep) {
+    const ms = typeof e.props.sleepMs === "number" ? e.props.sleepMs : undefined;
+    const how = ms !== undefined ? `${ms >= 1000 ? `${+(ms / 1000).toFixed(1)} seconds` : `${ms} ms`}` : "a while";
+    const repeat = e.props.inLoop ? " It's inside a loop, so it can happen more than once." : "";
+    return `${fnName(from)} deliberately waits ${how} (a setTimeout wrapped in a promise, ${at}) before going on. The process stays free to serve other requests, but this request, and whoever is waiting for its response, is held up the whole time.${repeat}`;
+  }
   if (to.kind === "middleware") {
     const lib = typeof to.props.library === "string" ? to.props.library : undefined;
     if (ev.to.stage?.startsWith("__library")) return `Library middleware runs before your code: ${lib && MIDDLEWARE[lib] ? `${lib} ${MIDDLEWARE[lib]}` : `${to.label} runs.`}`;
@@ -278,7 +285,8 @@ function localSentence(e: TraceEdge, from: TraceNode, to: TraceNode, ev: SceneEv
   }
   if (to.kind === "compute") {
     const cost = typeof e.props.cost === "number" ? e.props.cost : undefined;
-    const what = /compare/.test(String(e.label)) ? "checks the password against the stored hash with bcrypt" : `hashes the password with bcrypt${cost ? ` at work factor ${cost}` : ""}`;
+    const algo = /argon2/.test(String(to.props.library ?? e.label)) ? "Argon2" : "bcrypt";
+    const what = /compare|verify/.test(String(e.label)) ? `checks the password against the stored hash with ${algo}` : `hashes the password with ${algo}${cost ? ` at work factor ${cost}` : ""}`;
     const ms = cost ? ` (about ${Math.round(65 * 2 ** (cost - 10))} ms of CPU)` : "";
     return to.props.pool === "event-loop"
       ? `${fnName(from)} ${what}${ms} on the main thread: until it finishes, this process can't serve any other request.`
@@ -293,7 +301,13 @@ function localSentence(e: TraceEdge, from: TraceNode, to: TraceNode, ev: SceneEv
   if (from.kind === "ui-event") return `When this happens in the page, ${fnName(to)} runs (${fileLine(to)}).`;
   const notAwaited = e.props.notAwaited ? " without waiting for it to finish" : "";
   const dispatch = e.props.dispatch ? `, one of ${String(e.props.candidates ?? "several")} handlers chosen at runtime` : "";
-  return `${fnName(from)} calls ${fnName(to)}${notAwaited}${dispatch} (${at}).`;
+  const memory = (key: string) => (Array.isArray(to.props[key]) ? (to.props[key] as string[]).map((x) => `\`${x}\``).join(", ") : "");
+  const writes = memory("mutatesModuleState");
+  const reads = memory("readsModuleState");
+  const state = writes
+    ? ` It updates ${writes}, kept in this process's memory: no network call, but each running instance has its own copy and a restart empties it.`
+    : reads ? ` It reads ${reads}, kept in this process's memory: no network call, and it only knows what this instance has seen since it started.` : "";
+  return `${fnName(from)} calls ${fnName(to)}${notAwaited}${dispatch} (${at}).${state}`;
 }
 
 function networkSentence(model: Model, e: TraceEdge, from: TraceNode, to: TraceNode, fromDev: Device | undefined, toDev: Device | undefined, waits: boolean): string {
