@@ -377,6 +377,8 @@ a.card:hover { border-color: var(--accent); text-decoration: none; }
 .concept-row { display: grid; gap: 3px; padding: 12px 4px; border-bottom: 1px solid var(--border); color: var(--text); }
 .concept-row:hover { text-decoration: none; background: var(--bg-hover); }
 .concept-row b { font-weight: 600; display: flex; gap: 10px; align-items: baseline; justify-content: space-between; }
+.concept-badges { display: inline-flex; gap: 10px; }
+.concept-badges .eyebrow { color: var(--accent-text); }
 .concept-row .muted { font-size: 13.5px; }
 @media (max-width: 960px) {
   .home-hero { grid-template-columns: minmax(0, 1fr); gap: 28px; }
@@ -655,7 +657,7 @@ ul.plain { margin: 0; padding-left: 18px; display: grid; gap: 6px; color: var(--
 .cscene-canvas { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 .cscene-links { position: absolute; inset: 0; overflow: visible; }
 .cbox {
-  position: absolute; display: flex; flex-direction: column; gap: 6px; padding: 9px 11px 9px 13px; background: var(--bg-elev);
+  position: absolute; display: flex; flex-direction: column; gap: 4px; padding: 8px 11px 8px 13px; background: var(--bg-elev);
   border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: inset 3px 0 0 var(--dev-color); transition: border-color 0.2s;
 }
 .cbox.tone-busy { border-color: var(--sev-medium); }
@@ -665,11 +667,13 @@ ul.plain { margin: 0; padding-left: 18px; display: grid; gap: 6px; color: var(--
 .cbox-name { display: grid; min-width: 0; }
 .cbox-name b { font-size: 13px; }
 .cbox-name span { font-size: 11px; color: var(--text-faint); }
+.cbox > * { flex-shrink: 0; }
 .cbox-slots { display: flex; gap: 4px; flex-wrap: wrap; }
 .cbox-slots span { width: 14px; height: 10px; border-radius: 2px; border: 1.5px solid var(--dev-color); }
 .cbox-slots span.busy { background: var(--dev-color); }
+.token-label { font: 600 10px/1 var(--mono); paint-order: stroke; stroke: var(--bg-elev); stroke-width: 3px; stroke-linejoin: round; pointer-events: none; }
 .cbox-slots em { font-style: normal; font-size: 10.5px; color: var(--text-faint); margin-left: 2px; line-height: 10px; white-space: nowrap; }
-.cbox-queue { display: flex; gap: 3px; align-items: center; flex-wrap: wrap; }
+.cbox-queue { display: flex; gap: 3px; align-items: center; flex-wrap: nowrap; min-width: 0; }
 .cbox-queue span { width: 8px; height: 8px; border-radius: 50%; background: var(--sev-medium); }
 .cbox-queue em { font-style: normal; font-size: 11px; color: var(--sev-medium); margin-left: 3px; }
 .cbox-note { font-size: 11.5px; color: var(--text-dim); }

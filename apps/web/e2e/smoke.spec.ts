@@ -100,7 +100,7 @@ test("a Learn page asks for a prediction, then shows the simulated result", asyn
 
 test("every full concept has a working simulation", async ({ page }) => {
   await page.goto("/#/learn");
-  const full = page.getByTestId("concept-card").filter({ hasText: "simulation" });
+  const full = page.getByTestId("concept-card").filter({ hasText: "measured" });
   await expect(full).toHaveCount(12);
   for (const id of ["http-request-lifecycle", "short-polling", "long-polling", "server-sent-events", "websocket", "pub-sub", "message-queue", "load-balancer", "cache-aside", "n-plus-one", "concurrency-models"]) {
     await page.goto(`/#/learn/${id}`);
@@ -174,9 +174,14 @@ test("a deliberate sleep in a handler is a step of its own", async ({ page }) =>
   await expect(page.getByTestId("caption")).toContainText("deliberately waits 3.1 seconds");
 });
 
-test("every full concept opens on an animated scene", async ({ page }) => {
-  for (const id of ["http-request-lifecycle", "connection-pooling", "short-polling", "long-polling", "server-sent-events", "websocket", "pub-sub", "message-queue", "load-balancer", "cache-aside", "n-plus-one", "concurrency-models"]) {
-    await page.goto(`/#/learn/${id}`);
+test("every concept opens on an animated scene with a written page", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto("/#/learn");
+  const links = await page.getByTestId("concept-card").evaluateAll((els) => els.map((e) => e.getAttribute("href")!));
+  expect(links.length).toBeGreaterThanOrEqual(34);
+  for (const link of links) {
+    await page.goto(`/${link}`);
+    await expect(page.getByTestId("learn-page")).toContainText("The problem it solves");
     const scene = page.getByTestId("concept-scene");
     await expect(scene.locator(".cbox").nth(2)).toBeVisible();
     await expect(scene.locator(".try-item").nth(1)).toBeVisible();

@@ -8,6 +8,11 @@ import { cacheSim } from "./sims/cache.ts";
 import { nPlusOneSim } from "./sims/nplusone.ts";
 import { concurrencySim } from "./sims/concurrency.ts";
 import { lifecycleSim } from "./sims/lifecycle.ts";
+import { trafficPages } from "./extra-pages/traffic.ts";
+import { reliabilityPages } from "./extra-pages/reliability.ts";
+import { dataPages } from "./extra-pages/data.ts";
+import { asyncPages } from "./extra-pages/async.ts";
+import { platformPages } from "./extra-pages/platform.ts";
 
 /** A Learn page: kept under 600 words so it stays a page, not a chapter. */
 export interface LearnPage {
@@ -16,10 +21,12 @@ export interface LearnPage {
   how: string[];
   code?: { caption: string; text: string };
   breaks: string[];
-  sim: SimDef;
+  /** The calibrated "Measure it" simulation; the twelve core concepts have one. */
+  sim?: SimDef;
 }
 
-export const PAGES: LearnPage[] = [
+/** The twelve core pages, each with a calibrated simulation. */
+const CORE_PAGES: LearnPage[] = [
   {
     concept: "http-request-lifecycle",
     problem: "A request feels instant on localhost and slow in production, and most of the difference isn't your code. Before your handler runs, the browser may need a DNS lookup, a TCP handshake and a TLS handshake, each costing a full round trip to your server.",
@@ -213,6 +220,8 @@ export const PAGES: LearnPage[] = [
     sim: concurrencySim,
   },
 ];
+
+export const PAGES: LearnPage[] = [...CORE_PAGES, ...trafficPages, ...reliabilityPages, ...dataPages, ...asyncPages, ...platformPages];
 
 const byConcept = new Map(PAGES.map((p) => [p.concept, p]));
 

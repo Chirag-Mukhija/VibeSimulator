@@ -25,7 +25,7 @@ export const poolingScene: ConceptScene = {
       boxes: [
         { id: "users", kind: "users", label: "Users", detail: "one query each", x: 20, y: 140, w: 140, h: 76 },
         { id: "app", kind: "app", label: "Your app", detail: pooled ? `pool of ${pnum(p, "pool")} connections` : "opens a connection per request", x: 260, y: 118, w: 230, h: 120 },
-        { id: "db", kind: "database", label: "Postgres", detail: `accepts at most ${MAX_CONNECTIONS} connections`, x: 560, y: 114, w: 200, h: 124 },
+        { id: "db", kind: "database", label: "Postgres", detail: `max ${MAX_CONNECTIONS} connections`, x: 560, y: 114, w: 200, h: 124 },
       ],
       links: [
         { id: "u-app", from: "users", to: "app", label: "HTTP" },

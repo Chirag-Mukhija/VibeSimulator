@@ -38,7 +38,7 @@ export const cacheAsideScene: ConceptScene = {
     const ttl = EXPIRY[pstr(p, "expiry")] ?? 30000;
     return {
       boxes: [
-        { id: "users", kind: "users", label: "Users", detail: "read product items", x: 20, y: 140, w: 140, h: 84 },
+        { id: "users", kind: "users", label: "Users", detail: "read products", x: 10, y: 140, w: 150, h: 84 },
         { id: "app", kind: "app", label: "App", detail: on ? "checks the cache first" : "always asks the database", x: 230, y: 128, w: 190, h: 108 },
         { id: "cache", kind: "cache", label: "Redis cache", detail: on ? `keeps copies for ${ttl / 1000} s` : "turned off", x: 510, y: 16, w: 240, h: 112 },
         { id: "db", kind: "database", label: "Database", detail: `runs ${DB_SLOTS} queries at a time`, x: 510, y: 250, w: 240, h: 116 },
@@ -170,7 +170,7 @@ export const cacheAsideScene: ConceptScene = {
         const avg = done ? totalMs / done : 0;
         const q = db.waiting.length;
         const boxes: Record<string, BoxState> = {
-          users: { note: `${done} answered${stale ? `, ${stale} with old data` : ""}` },
+          users: { note: `${done} answered${stale ? ` (${stale} old)` : ""}` },
           app: on ? { note: `${hits} hits, ${misses} misses` } : { note: `${reads} reads, all to the database` },
           cache: on
             ? { note: held ? `holds ${held} item${held === 1 ? "" : "s"}${outdated ? `, ${outdated} out of date` : ""}` : "empty", tone: outdated ? "bad" : "ok" }

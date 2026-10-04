@@ -37,7 +37,7 @@ export const pubSubScene: ConceptScene = {
     for (const i of range) {
       const y = 22 + i * 120;
       boxes.push({ id: `u${i + 1}`, kind: "users", label: `Users on ${api(i)}`, detail: `${USERS_EACH} connected`, x: 20, y, w: 150, h: 84 });
-      boxes.push({ id: `a${i + 1}`, kind: "server", label: api(i), detail: !redis ? "knows only its own sockets" : flaky && i === FLAKY ? "loses Redis now and then" : 'subscribed to "chat"', x: 260, y, w: 180, h: 84 });
+      boxes.push({ id: `a${i + 1}`, kind: "server", label: api(i), detail: !redis ? "only its own sockets" : flaky && i === FLAKY ? "loses Redis now and then" : 'subscribed to "chat"', x: 260, y, w: 180, h: 84 });
       links.push({ id: userLink(i), from: `u${i + 1}`, to: `a${i + 1}`, label: "WebSocket", persistent: true });
       links.push({ id: redisLink(i), from: `a${i + 1}`, to: "redis", persistent: redis });
     }

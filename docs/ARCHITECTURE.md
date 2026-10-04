@@ -41,7 +41,7 @@ Everything to the left of the trace file runs in Node via the CLI (`apps/cli`). 
 | `packages/extractor` | Static analysis: repo → trace. Also the accuracy harness, and the prompts and citation checks for AI notes | `src/analyze.ts`, `src/values.ts`, `src/libraries.ts`, `src/functions.ts`, `src/notes.ts`, `eval/` |
 | `packages/findings` | Deterministic scale-risk rules over a trace | `src/rules.ts` |
 | `packages/sim` | Discrete-event engine, calibrated parameters, whole-flow simulation for Scale mode | `src/engine.ts`, `src/params.json`, `src/flowsim.ts` |
-| `packages/catalog` | Concept registry (34 concepts, 12 with full pages), the animated concept scenes, and the Learn simulations | `src/concepts.ts`, `src/pages.ts`, `src/scenes/`, `src/sims/` |
+| `packages/catalog` | Concept registry (34 concepts, each with an animated scene and a page; the 12 core ones also have a calibrated simulation) | `src/concepts.ts`, `src/pages.ts`, `src/extra-pages/`, `src/scenes/`, `src/sims/` |
 | `apps/cli` | `vibesim analyze`, `vibesim explain` | `src/main.ts` |
 | `apps/web` | The static viewer (Vite + React) | `src/pages/`, `src/components/`, `src/lib/` |
 | `calibration` | Real servers and load generators that produce `params.json` | `server.mjs`, `client.mjs`, `run.ts`, `REPORT.md` |
@@ -137,7 +137,7 @@ A small discrete-event simulator. Processes are generator functions that `yield`
 
 ### Concept scenes (`packages/catalog/src/scenes/`)
 
-Each full concept opens on an animated scene in a network-simulator style. A scene is plain data plus a small agent model: `layout(params)` returns boxes and links, and `start(params, seed)` returns a run whose `tick(ms)` advances a `World` (envelopes moving along links with arrival callbacks, timers, a seeded random source and a short log) and reports each box's state (slots in use, a line of waiting work, a note), the tokens in flight, counters and the log. `Station` models anything with fixed capacity and a FIFO line: server slots, pool connections, workers, threads. Scenes have 2 to 4 plain controls and "Try this" experiments that set them. Timings are slowed down to watch, and counters that quote real-world numbers say so. Tests run every scene and every experiment for 30 to 90 s of scene time, check that tokens use real links and boxes never overlap, and assert the mechanism (long polling sends fewer requests than short polling, batched N+1 makes 2 queries, a synchronous hash makes quick requests wait). `apps/web/src/components/ConceptScene.tsx` renders them and pauses scenes that are off screen.
+Every concept opens on an animated scene in a network-simulator style. A scene is plain data plus a small agent model: `layout(params)` returns boxes and links, and `start(params, seed)` returns a run whose `tick(ms)` advances a `World` (envelopes moving along links with arrival callbacks, timers, a seeded random source and a short log) and reports each box's state (slots in use, a line of waiting work, a note), the tokens in flight, counters and the log. `Station` models anything with fixed capacity and a FIFO line: server slots, pool connections, workers, threads. Scenes have 2 to 4 plain controls and "Try this" experiments that set them. Timings are slowed down to watch, and counters that quote real-world numbers say so. Tests run every scene and every experiment for 30 to 90 s of scene time, check that tokens use real links and boxes never overlap, and assert the mechanism (long polling sends fewer requests than short polling, batched N+1 makes 2 queries, a synchronous hash makes quick requests wait). Every experiment's promise is tested with the seed the page uses, so what the sentence says is what the reader sees. `apps/web/src/components/ConceptScene.tsx` renders them, labels each packet when few are in flight, and pauses scenes that are off screen; a browser test samples every scene and experiment and fails if any box's text is cut off or spills out.
 
 ### Learn simulations (`packages/catalog/src/sims/`)
 
@@ -191,7 +191,7 @@ Why this design: on the four gallery repos, the first pass made 499 claims. Inde
 | Findings | Positive and negative cases per rule; pinned expectations per fixture | `pnpm test` |
 | Simulation | Queueing-theory checks; what-if directions; Learn sims vs held-out measurements | `pnpm test` |
 | Calibration | Real-server measurement with a ±25% held-out gate | `pnpm --filter @vibesim/calibration calibrate` |
-| Concept scenes | Structure (links, overlap, bounds) and mechanism per scene and experiment | `pnpm test` |
+| Concept scenes | Structure (links, overlap, bounds, label lengths) and mechanism per scene and per experiment claim, for all 34 | `pnpm test` |
 | AI notes | Citation checks, path escapes, review verdicts | `pnpm test` |
 | Web | Playwright on the installed Chrome: gallery, devices playback and pacing, branches, timeline, findings, map, Learn scenes and experiments, drawer, tour, Scale, worker fallback, AI notes, and a layout audit (overflow, clipping, overlap) on every page at six viewport sizes plus dark mode | `pnpm --filter @vibesim/web test:e2e` |
 
@@ -202,7 +202,7 @@ Why this design: on the four gallery repos, the first pass made 499 claims. Inde
 - **A new library:** add creator and operation rows in `libraries.ts`, a fixture repo that uses it, and its edges to a truth file. Run `eval`.
 - **A new framework:** add an entry-point extractor next to `express.ts` and `nextjs.ts` that returns routes with their handler functions and middleware chain; the flow expansion is shared.
 - **A new finding:** add a rule to `rules.ts` with a concept link and fix text, plus positive and negative tests. If it changes what a fixture reports, update the pinned expectations.
-- **A new concept page:** add the concept in `concepts.ts`, the page in `pages.ts` (at most 600 words), a scene in `scenes/` (register it in `scenes/index.ts`) and a simulation in `sims/` with at most three knobs. A concept counts as full only with page, scene, simulation and a detection test.
+- **A new concept:** add it to `concepts.ts`, its page (at most 600 words) to `pages.ts` or a file in `extra-pages/`, and its scene in `scenes/` (registered in `scenes/index.ts`), with tests for each experiment's claim. A core concept also gets a calibrated simulation in `sims/` with at most three knobs and a detection test.
 - **A gallery repo:** see [USAGE.md](USAGE.md#6-add-a-repo-to-the-gallery).
 
 ## Known limits

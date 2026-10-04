@@ -1,18 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { CALIBRATION } from "@vibesim/sim";
 import { CONCEPTS, PAGES, deliver, wordCount } from "../src/index.ts";
+import type { SimDef } from "../src/sims/types.ts";
+
+/** The pages that carry a calibrated simulation (the twelve core concepts). */
+const WITH_SIM = PAGES.flatMap((p) => (p.sim ? [{ concept: p.concept, sim: p.sim }] : []));
+const simOf = (concept: string): SimDef => WITH_SIM.find((p) => p.concept === concept)!.sim;
 
 describe("Learn pages", () => {
-  it("every full concept has a page, and every page stays under 600 words with at most 3 knobs", () => {
-    for (const c of CONCEPTS.filter((x) => x.full)) expect(PAGES.some((p) => p.concept === c.id), c.id).toBe(true);
-    for (const p of PAGES) {
-      expect(wordCount(p), p.concept).toBeLessThanOrEqual(600);
+  it("every full concept has a page with a simulation, and every page stays under 600 words with at most 3 knobs", () => {
+    for (const c of CONCEPTS.filter((x) => x.full)) expect(WITH_SIM.some((p) => p.concept === c.id), c.id).toBe(true);
+    for (const p of PAGES) expect(wordCount(p), p.concept).toBeLessThanOrEqual(600);
+    for (const p of WITH_SIM) {
       expect(p.sim.knobs.length, p.concept).toBeLessThanOrEqual(3);
       expect(p.sim.assumptions.length, p.concept).toBeGreaterThan(0);
     }
   });
 
-  it.each(PAGES.map((p) => [p.concept, p] as const))("%s simulation runs, is deterministic and answers its prediction", (_c, p) => {
+  it.each(WITH_SIM.map((p) => [p.concept, p] as const))("%s simulation runs, is deterministic and answers its prediction", (_c, p) => {
     const t0 = performance.now();
     const a = p.sim.run(p.sim.defaults, 3);
     const ms = performance.now() - t0;
@@ -47,7 +52,7 @@ describe("simulations behave the way the theory says", () => {
   }, 20_000); // thousands of simulated connections: slow when the machine is busy
 
   it("pooling: a tiny pool queues; a connection per request fails past max_connections", () => {
-    const pool = PAGES.find((p) => p.concept === "connection-pooling")!.sim;
+    const pool = simOf("connection-pooling");
     const tiny = pool.run({ rate: 1500, pool: 2 });
     const roomy = pool.run({ rate: 1500, pool: 20 });
     expect(tiny.metrics[0]!.value).toBeGreaterThan(roomy.metrics[0]!.value * 3);
@@ -56,21 +61,21 @@ describe("simulations behave the way the theory says", () => {
   });
 
   it("cache: database load drops by the hit ratio", () => {
-    const cache = PAGES.find((p) => p.concept === "cache-aside")!.sim;
+    const cache = simOf("cache-aside");
     const r = cache.run({ rate: 1000, hit: 90, db: 5 });
     expect(r.metrics[3]!.value).toBeGreaterThan(70);
     expect(r.metrics[3]!.value).toBeLessThan(130);
   });
 
   it("concurrency: sync CPU work hurts simple requests more than the thread pool does", () => {
-    const c = PAGES.find((p) => p.concept === "concurrency-models")!.sim;
+    const c = simOf("concurrency-models");
     const blocking = c.run({ heavy: 5, cost: 100, model: "event-loop-blocking" });
     const pool = c.run({ heavy: 5, cost: 100, model: "thread-pool" });
     expect(blocking.metrics[0]!.value).toBeGreaterThan(pool.metrics[0]!.value * 3);
   });
 
   it("n+1: batching beats a query per item; an index beats a scan", () => {
-    const n = PAGES.find((p) => p.concept === "n-plus-one")!.sim;
+    const n = simOf("n-plus-one");
     const loop = n.run({ items: 50, rows: 1_000_000, strategy: "n1-index" }).metrics[0]!.value;
     const batch = n.run({ items: 50, rows: 1_000_000, strategy: "one-index" }).metrics[0]!.value;
     const scan = n.run({ items: 50, rows: 1_000_000, strategy: "one-noindex" }).metrics[0]!.value;
@@ -79,7 +84,7 @@ describe("simulations behave the way the theory says", () => {
   });
 
   it("load balancing: least connections has the best tail with heavy-tailed costs", () => {
-    const lb = PAGES.find((p) => p.concept === "load-balancer")!.sim;
+    const lb = simOf("load-balancer");
     const r = lb.run({ servers: 4, algo: "least-connections", mix: "heavy-tail" });
     const chart = r.charts[0]!;
     if (chart.type !== "bars") throw new Error("expected bars");

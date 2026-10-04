@@ -1,4 +1,4 @@
-import { CATEGORY_LABELS, CONCEPTS, concept, type Category } from "@vibesim/catalog";
+import { CATEGORY_LABELS, CONCEPTS, concept, sceneFor, type Category } from "@vibesim/catalog";
 import { href } from "../lib/router.ts";
 import { TopBar } from "../components/TopBar.tsx";
 import { ConceptBody } from "../components/ConceptBody.tsx";
@@ -12,7 +12,7 @@ export function LearnIndex() {
         <section className="hero" style={{ paddingBottom: 8 }}>
           <span className="eyebrow">Concepts</span>
           <h1>The ideas behind every arrow</h1>
-          <p>Pages marked "simulation" let you change the inputs and watch where it breaks, with memory and CPU numbers measured on a real Node server.</p>
+          <p>Every concept opens on an animated scene: change the controls and watch requests, queues and connections react. Pages marked "measured" also have a simulation with memory and CPU numbers measured on a real Node server.</p>
         </section>
         {categories.map((cat) => {
           const list = CONCEPTS.filter((c) => c.category === cat);
@@ -23,7 +23,13 @@ export function LearnIndex() {
               <div className="concept-list">
                 {list.map((c) => (
                   <a key={c.id} className="concept-row" href={href(["learn", c.id])} data-testid="concept-card">
-                    <b>{c.title}{c.full && <span className="eyebrow" style={{ color: "var(--accent-text)" }}>simulation</span>}</b>
+                    <b>
+                      <span>{c.title}</span>
+                      <span className="concept-badges">
+                        {sceneFor(c.id) && <span className="eyebrow">scene</span>}
+                        {c.full && <span className="eyebrow">measured</span>}
+                      </span>
+                    </b>
                     <span className="muted">{c.summary}</span>
                   </a>
                 ))}

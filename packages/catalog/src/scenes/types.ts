@@ -11,7 +11,10 @@ export type SceneControl =
 
 export type SceneParams = Record<string, string | number | boolean>;
 
-export type BoxKind = "users" | "browser" | "proxy" | "balancer" | "server" | "app" | "database" | "cache" | "queue" | "channel" | "worker" | "thread" | "dns";
+export type BoxKind =
+  | "users" | "browser" | "proxy" | "balancer" | "server" | "app" | "database" | "cache" | "queue" | "channel" | "worker" | "thread" | "dns"
+  /** A third-party service (Stripe, an email provider), a file store (S3), a scheduler's clock, an API gateway, a CDN edge location. */
+  | "external" | "storage" | "clock" | "gateway" | "edge";
 
 export interface SceneBox {
   id: string;
@@ -37,7 +40,6 @@ export interface SceneLink {
 export interface BoxState {
   /** One short line under the label: "3 in progress", "max 10". */
   note?: string;
-  /** Slots such as pool connections, worker threads or server capacity. */
   /** Fixed capacity drawn as squares, filled when in use; `label` says what one square is. */
   slots?: { total: number; busy: number; label?: string };
   /** How many are waiting in line here. */

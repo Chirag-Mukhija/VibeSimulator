@@ -32,6 +32,8 @@ const PATHS: Record<string, ReactNode> = {
   unknown: <><circle cx="12" cy="12" r="8" strokeDasharray="3 3" /><path d="M10 9.5a2 2 0 1 1 3 1.7c-.7.4-1 .9-1 1.8M12 16h.01" /></>,
   server: <><rect x="4" y="4" width="16" height="7" rx="1.5" /><rect x="4" y="13" width="16" height="7" rx="1.5" /><path d="M8 7.5h.01M8 16.5h.01M12 7.5h5M12 16.5h5" /></>,
   laptop: <><rect x="5" y="5" width="14" height="10" rx="1.5" /><path d="M3 19h18" /></>,
+  storage: <><ellipse cx="12" cy="6.5" rx="8" ry="2.5" /><path d="M4 6.5 5.6 18.6a1.6 1.6 0 0 0 1.6 1.4h9.6a1.6 1.6 0 0 0 1.6-1.4L20 6.5" /></>,
+  edge: <><circle cx="12" cy="12" r="8" /><path d="M4 12h16M12 4c2.5 2.5 2.5 13.5 0 16" /><circle cx="7.5" cy="8" r="1.5" fill="currentColor" stroke="none" /><circle cx="16.5" cy="16" r="1.5" fill="currentColor" stroke="none" /></>,
 };
 
 export function NodeIcon({ kind, size = 16, color }: { kind: string; size?: number; color?: string }) {

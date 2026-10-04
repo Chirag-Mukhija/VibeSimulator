@@ -11,7 +11,7 @@ export const loadBalancerScene: ConceptScene = {
   title: "Spreading requests over servers",
   intro: "Users send requests to a load balancer, which forwards each one to a server. Each server works on 2 requests at a time and lines up the rest. Slowed down so you can watch; each envelope is one request.",
   width: 780,
-  height: 400,
+  height: 410,
   controls: [
     { type: "choice", id: "algorithm", label: "Balancer picks", options: [
       { value: "round-robin", label: "Round robin" },
@@ -30,9 +30,9 @@ export const loadBalancerScene: ConceptScene = {
       { id: "lb", kind: "balancer", label: "Load balancer", detail: pstr(p, "algorithm").replace("-", " "), x: 270, y: 152, w: 170, h: 92 },
     ];
     const links: SceneLink[] = [{ id: "u-lb", from: "users", to: "lb", label: "HTTP" }];
-    const top = (400 - (n * 82 + (n - 1) * 18)) / 2;
+    const top = (410 - (n * 96 + (n - 1) * 4)) / 2;
     for (let i = 0; i < n; i++) {
-      boxes.push({ id: `s${i + 1}`, kind: "server", label: `Server ${i + 1}`, detail: i === 1 && pbool(p, "slow") ? "slow: 4× longer per request" : "app instance", x: 560, y: top + i * 100, w: 200, h: 82 });
+      boxes.push({ id: `s${i + 1}`, kind: "server", label: `Server ${i + 1}`, detail: i === 1 && pbool(p, "slow") ? "slow: 4× longer per request" : "app instance", x: 560, y: top + i * 100, w: 200, h: 96 });
       links.push({ id: `lb-s${i + 1}`, from: "lb", to: `s${i + 1}` });
     }
     return { boxes, links };

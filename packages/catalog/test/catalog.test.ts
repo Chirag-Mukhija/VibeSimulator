@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CONCEPTS, concept } from "../src/index.ts";
+import { CONCEPTS, PAGES, concept, sceneFor } from "../src/index.ts";
 import { RULES } from "../../findings/src/index.ts";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -13,6 +13,13 @@ describe("concept catalog", () => {
     expect(new Set(ids).size).toBe(ids.length);
     for (const c of CONCEPTS) for (const r of c.related) expect(concept(r), `${c.id} -> ${r}`).toBeDefined();
     expect(CONCEPTS.filter((c) => c.full)).toHaveLength(12);
+  });
+
+  it("every concept has an animated scene and a written page", () => {
+    for (const c of CONCEPTS) {
+      expect(sceneFor(c.id), `${c.id} scene`).toBeDefined();
+      expect(PAGES.filter((p) => p.concept === c.id), `${c.id} page`).toHaveLength(1);
+    }
   });
 
   it("covers every concept the findings rules and extractor link to", () => {

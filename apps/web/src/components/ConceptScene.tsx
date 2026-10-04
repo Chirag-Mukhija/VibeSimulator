@@ -6,14 +6,19 @@ import { Icon } from "./ui.tsx";
 const BOX_ICON: Record<string, string> = {
   users: "laptop", browser: "ui-event", proxy: "proxy", balancer: "proxy", server: "server", app: "server", database: "database",
   cache: "cache", queue: "queue", channel: "topic", worker: "worker", thread: "compute", dns: "external-api",
+  external: "external-api", storage: "storage", clock: "timer", gateway: "proxy", edge: "edge",
 };
 const BOX_COLOR: Record<string, string> = {
   users: "var(--k-actor)", browser: "var(--k-actor)", proxy: "var(--k-edge)", balancer: "var(--k-edge)", server: "var(--k-code)", app: "var(--k-code)",
   database: "var(--k-database)", cache: "var(--k-cache)", queue: "var(--k-messaging)", channel: "var(--k-messaging)", worker: "var(--k-code)", thread: "var(--k-compute)", dns: "var(--k-external)",
+  external: "var(--k-external)", storage: "var(--k-database)", clock: "var(--k-entry)", gateway: "var(--k-edge)", edge: "var(--k-edge)",
 };
 const TOKEN_COLOR: Record<Token["kind"], string> = {
   request: "var(--k-entry)", reply: "var(--good)", push: "var(--k-messaging)", empty: "var(--text-faint)", error: "var(--sev-high)", handshake: "var(--k-external)",
 };
+
+/** Above this many packets in flight, their labels are left off so they don't pile up. */
+const LABEL_LIMIT = 10;
 
 interface Curve { p0: [number, number]; c1: [number, number]; c2: [number, number]; p3: [number, number] }
 
@@ -141,10 +146,13 @@ export function ConceptSceneView({ scene, compact = false }: { scene: ConceptSce
                 const color = TOKEN_COLOR[t.kind];
                 const hollow = t.kind === "reply" || t.kind === "empty";
                 const small = t.kind === "handshake";
+                // Name each packet, like a network simulator, unless so many are in flight that labels would pile up.
+                const label = frame.tokens.length <= LABEL_LIMIT && t.label ? (t.label.length > 22 ? `${t.label.slice(0, 21)}…` : t.label) : undefined;
                 return (
                   <g key={t.id} transform={`translate(${x - (small ? 7 : 10)},${y - (small ? 5 : 7)})`}>
                     <rect width={small ? 14 : 20} height={small ? 10 : 14} rx={2} fill={hollow ? "var(--bg-elev)" : color} stroke={color} strokeWidth={1.8} />
                     {!small && <path d={hollow ? "M4 7.5l4 3.5L16 3.5" : "M1.5 2l8.5 6 8.5-6"} fill="none" stroke={hollow ? color : "var(--bg-elev)"} strokeWidth={1.6} strokeLinecap="round" />}
+                    {label && <text className="token-label" x={small ? 7 : 10} y={-5} textAnchor="middle" fill={color}>{label}</text>}
                   </g>
                 );
               })}
@@ -167,12 +175,17 @@ export function ConceptSceneView({ scene, compact = false }: { scene: ConceptSce
                       {st.slots.label && <em>{st.slots.busy}/{st.slots.total} {st.slots.label}</em>}
                     </div>
                   )}
-                  {(st.queue ?? 0) > 0 && (
-                    <div className="cbox-queue" title={`${st.queue} waiting`}>
-                      {Array.from({ length: Math.min(12, st.queue!) }, (_, i) => <span key={i} />)}
-                      {st.queue! > 12 && <em>+{st.queue! - 12}</em>}
-                    </div>
-                  )}
+                  {(st.queue ?? 0) > 0 && (() => {
+                    // One row of dots that fits the box (11 px each), then "+N" for the rest.
+                    const fit = Math.max(3, Math.min(12, Math.floor((b.w - 24 - 34) / 11)));
+                    const shown = st.queue! > fit ? fit - 1 : st.queue!;
+                    return (
+                      <div className="cbox-queue" title={`${st.queue} waiting`}>
+                        {Array.from({ length: shown }, (_, i) => <span key={i} />)}
+                        {st.queue! > shown && <em>+{st.queue! - shown}</em>}
+                      </div>
+                    );
+                  })()}
                   {st.note && <div className="cbox-note ellipsis">{st.note}</div>}
                 </div>
               );

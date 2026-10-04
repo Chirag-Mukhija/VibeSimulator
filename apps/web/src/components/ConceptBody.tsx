@@ -43,7 +43,7 @@ export function ConceptBody({ id, compact = false, onOpen }: { id: string; compa
         <p className="faint" style={{ margin: 0 }}>A full page is not written for this concept yet.</p>
       )}
       <InYourRepo id={id} />
-      {p && (compact ? (
+      {p?.sim && (compact ? (
         <details className="measure">
           <summary>Measure it: the calibrated simulation (numbers, predict then run)</summary>
           <SimLab key={c.id} sim={p.sim} compact />
